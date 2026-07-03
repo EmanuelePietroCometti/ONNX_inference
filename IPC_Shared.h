@@ -38,8 +38,7 @@ enum class InferenceType : WORD {
 // STRUCTS
 // Contains the output produced by the AI model
 typedef struct resultInference {
-    InferenceState state;
-    InferenceType inferenceType;
+    volatile InferenceState state;
     DWORD sizeX;
     DWORD sizeY;
     TCHAR json[1024];
@@ -57,6 +56,7 @@ typedef struct controlPoint {
     TCHAR eventReadyName[128];
     PointState status;
     resultInference results;
+    InferenceType inferenceType;
 } controlPoint, * PTcontrolPoint;
 
 // Manages the global list of control points for IPC

@@ -19,13 +19,20 @@ public:
 private:
 	// HANDLE for the local mutex and event
 	PTcontrolPoint controlPointData;
+	std::thread workerThread;
+
+	// Handle di sincronizzazione
 	HANDLE hLocalMutex;
 	HANDLE hEventReady;
 	HANDLE hEventResults;
-	HANDLE hMMFImage;
-	void* pImageBuffer;
 
-	std::thread workerThread;
+	// MMF Input (Immagine inviata dalla Selezionatrice)
+	HANDLE hMMFImage;
+	LPVOID pImageBuffer;
+
+	// MMF Output (Anomaly Map scritta dall'AI) -> AGGIUNGI QUESTI
+	HANDLE hMMFResImage;
+	LPVOID pResImageBuffer;
 
 	void InferenceLoop();
 	void InitializeLocalPC();
