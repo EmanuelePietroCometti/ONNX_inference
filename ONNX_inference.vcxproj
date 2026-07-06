@@ -102,13 +102,20 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\lib;D:\emanuele\SDK\opencv\build\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120d.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /y /d "D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /y /d "D:\emanuele\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -118,20 +125,30 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\lib;D:\emanuele\SDK\opencv\build\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /y /d "D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /y /d "D:\emanuele\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AnomalyEngine.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ManagerONNX.cpp" />
     <ClCompile Include="WorkerONNX.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AnomalyEngine.h" />
+    <ClInclude Include="IEngine.h" />
     <ClInclude Include="IPC_Shared.h" />
     <ClInclude Include="ManagerONNX.h" />
     <ClInclude Include="WorkerONNX.h" />

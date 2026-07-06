@@ -2,6 +2,8 @@
 
 
 #include "IPC_Shared.h"
+#include "IEngine.h"
+#include "AnomalyEngine.h"
 #include <thread>
 #include <atomic>
 #include <string>
@@ -17,6 +19,7 @@ public:
 	void Stop();
 	void MarkAsCOnfigured();
 private:
+	std::unique_ptr<IEngine> aiEngine;
 	// HANDLE for the local mutex and event
 	PTcontrolPoint controlPointData;
 	std::thread workerThread;
@@ -26,11 +29,11 @@ private:
 	HANDLE hEventReady;
 	HANDLE hEventResults;
 
-	// MMF Input (Immagine inviata dalla Selezionatrice)
+	// MMF Input
 	HANDLE hMMFImage;
 	LPVOID pImageBuffer;
 
-	// MMF Output (Anomaly Map scritta dall'AI) -> AGGIUNGI QUESTI
+	// MMF Output
 	HANDLE hMMFResImage;
 	LPVOID pResImageBuffer;
 

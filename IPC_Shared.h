@@ -25,7 +25,8 @@ enum class ListState : WORD {
     IDLE = 0,
     CONFIGURED = 1,
     UPDATE_PENDING = 2,
-    QUIT = 3
+    QUIT = 3,
+    ERROR_DETECTED = 4
 };
 
 // Defines the type of AI task

@@ -108,29 +108,48 @@ void WorkerONNX::InferenceLoop()
 
 			fmt::print("Control point: {} - Inference running...\n", controlPointData->idPunto);
 
-			// SIMULATE INFERENCE COMPUTE TIME
-			std::this_thread::sleep_for(std::chrono::milliseconds(15));
+			float anomalyScore = 0.0f;
+			std::string statusStr = "ERROR";
 
-			if (pResImageBuffer != NULL) {
-				int nResPayload = controlPointData->sizeX * controlPointData->sizeY;
-				uint8_t* pPixels = static_cast<uint8_t*>(pResImageBuffer);
+			try {
+				// Call the ONNX Engine if successfully initialized and memory is mapped
+				if (aiEngine && pImageBuffer != nullptr && pResImageBuffer != nullptr) {
+					const uint8_t* pRawInput = static_cast<const uint8_t*>(pImageBuffer);
+					uint8_t* pRawHeatmap = static_cast<uint8_t*>(pResImageBuffer);
 
-				for (int p = 0; p < nResPayload; p++) {
-					pPixels[p] = static_cast<uint8_t>(p % 2);
+					// Execute hardware-accelerated inference
+					aiEngine->Infer(pRawInput,
+						controlPointData->sizeX,
+						controlPointData->sizeY,
+						controlPointData->bpp / 8,
+						pRawHeatmap,
+						anomalyScore,
+						statusStr);
 				}
+			}
+			catch (const std::exception& e) {
+				fmt::print(stderr, "### AI INFERENCE EXCEPTION ON CP {}: {}\n", controlPointData->idPunto, e.what());
+				controlPointData->results.state = InferenceState::ERROR_DETECTED;
 			}
 
 			fmt::print("Control point: {} - Inference finished!\n", controlPointData->idPunto);
+
 
 			// SYNCHRONIZE STATE AND JSON
 			// At the end of the inference, it acquires the lock 
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
 			if (resWait == WAIT_OBJECT_0) {
-				controlPointData->results.state = InferenceState::RESULT_READY;
+				if (controlPointData->results.state != InferenceState::ERROR_DETECTED) {
+					controlPointData->results.state = InferenceState::RESULT_READY;
+				}
 
-				// Test results
-				std::wstring jsonPayload = fmt::format(L"{{\"anomaly_score\": {:.2f}, \"status\": \"OK\"}}", (rand() % 100) / 100.0);
+				// Convert the standard string from AI Engine to wide string for IPC
+				std::wstring wStatusStr(statusStr.begin(), statusStr.end());
+
+				// Serialize actual AI results to JSON instead of rand()
+				std::wstring jsonPayload = fmt::format(L"{{\"anomaly_score\": {:.4f}, \"status\": \"{}\"}}", anomalyScore, wStatusStr);
 				wcscpy_s(controlPointData->results.json, 1024, jsonPayload.c_str());
+
 				fmt::print("Worker {} results copied!\n", controlPointData->idPunto);
 
 				ReleaseMutex(hLocalMutex);
@@ -190,7 +209,8 @@ void WorkerONNX::InitializeLocalPC()
 	switch (controlPointData->inferenceType) {
 	case InferenceType::ANOMALY:
 		fmt::print("Initialize ONNX engine for ANOMALY!\n");
-		// engine = std::make_unique<AnomalyDetectionEngine>();
+		aiEngine = std::make_unique<AnomalyEngine>();
+		aiEngine->Initialize(controlPointData->pathModello);
 		break;
 	case InferenceType::CLASSIFICATION:
 		fmt::print("Initialize ONNX engine for CLASSIFICATION!\n");

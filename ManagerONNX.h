@@ -2,6 +2,7 @@
 
 #include "IPC_Shared.h"
 #include "WorkerONNX.h"
+
 #include <Windows.h>
 #include <map>
 #include <memory>

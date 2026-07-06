@@ -86,17 +86,28 @@ void ManagerONNX::HandleConfiguration()
 	fmt::print(">> Configuration request received (UPDATE_PENDING)!\n");
 
 	activeWorkers.clear();
+	bool configSuccess = true;
 
-	// Iteration on the control points list to configure each one
-	for (DWORD i = 0; i < pSharedList->numPunti; i++) {
-		DWORD idPunto = pSharedList->points[i].idPunto;
+	try {
+		// Iteration on the control points list to configure each one
+		for (DWORD i = 0; i < pSharedList->numPunti; i++) {
+			DWORD idPunto = pSharedList->points[i].idPunto;
 
-		// Start a new worker for this point 
-		activeWorkers[idPunto] = std::make_unique<WorkerONNX>(&pSharedList->points[i]);
-		activeWorkers[idPunto]->Start();
+			// Start a new worker for this point 
+			activeWorkers[idPunto] = std::make_unique<WorkerONNX>(&pSharedList->points[i]);
+			activeWorkers[idPunto]->Start();
 
-		// Set the state to CONFIGURED after the thread creation
-		activeWorkers[idPunto]->MarkAsCOnfigured();
+			// Set the state to CONFIGURED after the thread creation
+			activeWorkers[idPunto]->MarkAsCOnfigured();
+		}
+	}
+	catch (const std::exception& e) {
+		fmt::print(stderr, "### ERROR DURING CONFIGURATION: {}\n", e.what());
+		configSuccess = false;
+	}
+
+	if (!configSuccess) {
+		pSharedList->state = ListState::ERROR_DETECTED;
 	}
 
 	// Notify the external program that all threads started and configured correctly
