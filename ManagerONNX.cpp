@@ -53,6 +53,11 @@ void ManagerONNX::Run()
 
 bool ManagerONNX::InitializeIPC()
 {
+	// Global mutex and events initialization
+	hGlobalMutex = CreateMutex(NULL, FALSE, TEXT("LISTMUTEX"));
+	hEventTrigger = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTTRIGGER"));
+	hEventAck = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTACK"));
+
 	// Mapping global shared memory
 	hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(controlPointsList), L"CONTROLPOINTLIST");
 
@@ -73,11 +78,6 @@ bool ManagerONNX::InitializeIPC()
 		return false;
 	}
 
-	// Global mutex and events initialization
-	hGlobalMutex = CreateMutex(NULL, FALSE, TEXT("LISTMUTEX"));
-	hEventTrigger = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTTRIGGER"));
-	hEventAck = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTACK"));
-
 	return (hGlobalMutex && hEventTrigger && hEventAck);
 }
 
@@ -88,9 +88,10 @@ void ManagerONNX::HandleConfiguration()
 	activeWorkers.clear();
 	bool configSuccess = true;
 
+	DWORD i = 0;
 	try {
 		// Iteration on the control points list to configure each one
-		for (DWORD i = 0; i < pSharedList->numPunti; i++) {
+		for (i = 0; i < pSharedList->numPunti; i++) {
 			DWORD idPunto = pSharedList->points[i].idPunto;
 
 			// Start a new worker for this point 
@@ -98,16 +99,21 @@ void ManagerONNX::HandleConfiguration()
 			activeWorkers[idPunto]->Start();
 
 			// Set the state to CONFIGURED after the thread creation
-			activeWorkers[idPunto]->MarkAsCOnfigured();
+			activeWorkers[idPunto]->MarkAsConfigured();
 		}
 	}
 	catch (const std::exception& e) {
+		DWORD idPunto = pSharedList->points[i].idPunto;
 		fmt::print(stderr, "### ERROR DURING CONFIGURATION: {}\n", e.what());
+		activeWorkers[idPunto]->MarkAsError();
 		configSuccess = false;
 	}
 
 	if (!configSuccess) {
 		pSharedList->state = ListState::ERROR_DETECTED;
+	}
+	else {
+		pSharedList->state = ListState::CONFIGURED;
 	}
 
 	// Notify the external program that all threads started and configured correctly

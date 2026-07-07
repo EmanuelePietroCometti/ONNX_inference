@@ -57,7 +57,7 @@ void WorkerONNX::Stop()
 	fmt::print(">> Worker {} stopped!\n", controlPointData->idPunto);
 }
 
-void WorkerONNX::MarkAsCOnfigured()
+void WorkerONNX::MarkAsConfigured()
 {
 	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
 	if (waitRes == WAIT_OBJECT_0)
@@ -68,38 +68,32 @@ void WorkerONNX::MarkAsCOnfigured()
 	}
 }
 
+void WorkerONNX::MarkAsError()
+{
+	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
+	if (waitRes == WAIT_OBJECT_0)
+	{
+		controlPointData->status = PointState::ERROR_DETECTED;
+		fmt::print("Worker {} ERROR_DETECTED\n", controlPointData->idPunto);
+		ReleaseMutex(hLocalMutex);
+	}
+}
+
 void WorkerONNX::InferenceLoop()
 {
 	fmt::print(">> Worker thread started for control point: {}\n", controlPointData->idPunto);
-	while (true) {
+	bool shouldQuit = false;
+	while (!shouldQuit) {
+		bool inferenceError = false;
 		// Thread waiting for the signal eventReady
 		WaitForSingleObject(hEventReady, INFINITE);
 
 		// Lock acquire 
 		DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
 		if (waitRes == WAIT_OBJECT_0) {
-			bool shouldQuit = false;
-
 			// Check if the state is QUIT or UPDATE_PENDING
 			if (controlPointData->status == PointState::QUIT || controlPointData->status == PointState::UPDATE_PENDING) {
 				shouldQuit = true;
-			}
-			else if (controlPointData->status == PointState::CONFIGURED) {
-				if (pImageBuffer != NULL) {
-					int nPayload = controlPointData->sizeX * controlPointData->sizeY * controlPointData->bpp / 8;
-
-					std::vector<uint8_t> expectedInput(nPayload);
-					for (int p = 0; p < nPayload; p++) {
-						expectedInput[p] = static_cast<uint8_t>(p % 2);
-					}
-
-					if (memcmp(pImageBuffer, expectedInput.data(), nPayload) == 0) {
-						fmt::print(">> CP {}: _IMAGE memcmp PASSED!\n", controlPointData->idPunto);
-					}
-					else {
-						fmt::print(stderr, "## CP {}: _IMAGE memcmp FAILED!\n", controlPointData->idPunto);
-					}
-				}
 			}
 
 			ReleaseMutex(hLocalMutex);
@@ -129,7 +123,7 @@ void WorkerONNX::InferenceLoop()
 			}
 			catch (const std::exception& e) {
 				fmt::print(stderr, "### AI INFERENCE EXCEPTION ON CP {}: {}\n", controlPointData->idPunto, e.what());
-				controlPointData->results.state = InferenceState::ERROR_DETECTED;
+				inferenceError = false;
 			}
 
 			fmt::print("Control point: {} - Inference finished!\n", controlPointData->idPunto);
@@ -139,8 +133,11 @@ void WorkerONNX::InferenceLoop()
 			// At the end of the inference, it acquires the lock 
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
 			if (resWait == WAIT_OBJECT_0) {
-				if (controlPointData->results.state != InferenceState::ERROR_DETECTED) {
+				if (!inferenceError) {
 					controlPointData->results.state = InferenceState::RESULT_READY;
+				}
+				else {
+					controlPointData->results.state = InferenceState::ERROR_DETECTED;
 				}
 
 				// Convert the standard string from AI Engine to wide string for IPC

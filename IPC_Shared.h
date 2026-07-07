@@ -39,7 +39,7 @@ enum class InferenceType : WORD {
 // STRUCTS
 // Contains the output produced by the AI model
 typedef struct resultInference {
-    volatile InferenceState state;
+    InferenceState state;
     DWORD sizeX;
     DWORD sizeY;
     TCHAR json[1024];

@@ -17,7 +17,8 @@ public:
 	// the control point
 	void Start();
 	void Stop();
-	void MarkAsCOnfigured();
+	void MarkAsConfigured();
+	void MarkAsError();
 private:
 	std::unique_ptr<IEngine> aiEngine;
 	// HANDLE for the local mutex and event
