@@ -1,4 +1,5 @@
 #include "WorkerONNX.h"
+#include "ClassificationEngine.h"
 #include <iostream>
 #include <chrono>
 #include <fmt/core.h>
@@ -6,6 +7,9 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 WorkerONNX::WorkerONNX(PTcontrolPoint pPoint) : 
 	controlPointData(pPoint), 
@@ -130,7 +134,6 @@ void WorkerONNX::InferenceLoop()
 
 
 			// SYNCHRONIZE STATE AND JSON
-			// At the end of the inference, it acquires the lock 
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
 			if (resWait == WAIT_OBJECT_0) {
 				if (!inferenceError) {
@@ -140,18 +143,32 @@ void WorkerONNX::InferenceLoop()
 					controlPointData->results.state = InferenceState::ERROR_DETECTED;
 				}
 
-				// Convert the standard string from AI Engine to wide string for IPC
-				std::wstring wStatusStr(statusStr.begin(), statusStr.end());
+				// --- Build JSON payload safely using nlohmann/json ---
+				json responseJson;
 
-				// Serialize actual AI results to JSON instead of rand()
-				std::wstring jsonPayload = fmt::format(L"{{\"anomaly_score\": {:.4f}, \"status\": \"{}\"}}", anomalyScore, wStatusStr);
-				wcscpy_s(controlPointData->results.json, 1024, jsonPayload.c_str());
+				if (controlPointData->inferenceType == InferenceType::ANOMALY) {
+					responseJson["anomaly_score"] = anomalyScore;
+					responseJson["status"] = statusStr; // Stored as a string
+				}
+				else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
+					// For classification, statusStr holds the class ID. 
+					// Convert it to int so it appears as a number in the JSON, not a string.
+					responseJson["class_id"] = stoi(statusStr);
+					responseJson["confidence"] = anomalyScore;
+				}
 
-				fmt::print("Worker {} results copied!\n", controlPointData->idPunto);
+				// Dump the JSON object to a standard string (compact, no indent)
+				std::string serializedJson = responseJson.dump();
+
+				// Convert to wide string to match your IPC Shared Memory TCHAR definition
+				std::wstring wJsonPayload(serializedJson.begin(), serializedJson.end());
+
+				// Copy the safely generated JSON directly into shared memory
+				wcscpy_s(controlPointData->results.json, 1024, wJsonPayload.c_str());
+
+				fmt::print("Worker {} results copied: {}\n", controlPointData->idPunto, serializedJson);
 
 				ReleaseMutex(hLocalMutex);
-
-				// Set the event to notify the external process that the results are ready
 				SetEvent(hEventResults);
 			}
 		}
@@ -211,7 +228,8 @@ void WorkerONNX::InitializeLocalPC()
 		break;
 	case InferenceType::CLASSIFICATION:
 		fmt::print("Initialize ONNX engine for CLASSIFICATION!\n");
-		// engine = std::make_unique<ClassificationEngine>();
+		aiEngine = std::make_unique<ClassificationEngine>();
+		aiEngine->Initialize(controlPointData->pathModello);
 		break;
 	case InferenceType::OBJECT_DETECTION:
 		fmt::print("Initialize ONNX engine for OBJECT DETECTION!\n");

@@ -102,7 +102,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;D:\emanuele\SDK\nlohmann_json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
@@ -125,7 +125,7 @@ xcopy /y /d "D:\emanuele\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\emanuele\SDK\fmt-11.1.4\include;D:\emanuele\SDK\onnxruntime-win-x64-gpu-1.24.4\include;D:\emanuele\SDK\opencv\build\include;D:\emanuele\SDK\nlohmann_json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
@@ -142,12 +142,14 @@ xcopy /y /d "D:\emanuele\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AnomalyEngine.cpp" />
+    <ClCompile Include="ClassificationEngine.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ManagerONNX.cpp" />
     <ClCompile Include="WorkerONNX.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AnomalyEngine.h" />
+    <ClInclude Include="ClassificationEngine.h" />
     <ClInclude Include="IEngine.h" />
     <ClInclude Include="IPC_Shared.h" />
     <ClInclude Include="ManagerONNX.h" />

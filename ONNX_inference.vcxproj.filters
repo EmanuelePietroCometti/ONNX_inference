@@ -27,6 +27,9 @@
     <ClCompile Include="AnomalyEngine.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
+    <ClCompile Include="ClassificationEngine.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="IPC_Shared.h">
@@ -42,6 +45,9 @@
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="AnomalyEngine.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="ClassificationEngine.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
   </ItemGroup>
