@@ -167,7 +167,7 @@ void WorkerONNX::InferenceLoop()
 				// Dump the JSON object to a standard string (compact, no indent)
 				std::string serializedJson = responseJson.dump();
 
-				// Convert to wide string to match your IPC Shared Memory TCHAR definition
+				// Convert to wide string to match IPC Shared Memory TCHAR definition
 				std::wstring wJsonPayload(serializedJson.begin(), serializedJson.end());
 
 				// Copy the safely generated JSON directly into shared memory

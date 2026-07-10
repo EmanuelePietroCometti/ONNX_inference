@@ -35,20 +35,18 @@ void ManagerONNX::Run()
 		// WAIT_ABANDONED still grants ownership (previous owner crashed while
 		// holding the mutex): it MUST be handled like WAIT_OBJECT_0, otherwise
 		// the mutex is acquired here and never released, deadlocking both processes
+		ListState requestedState = ListState::IDLE;
 		DWORD waitMutex = WaitForSingleObject(hGlobalMutex, INFINITE);
 		if (waitMutex == WAIT_OBJECT_0 || waitMutex == WAIT_ABANDONED) {
-			__try {
-				if (pSharedList->state == ListState::QUIT) {
-					HandleTermination();
-					isRunning = false;
-				}
-				else if (pSharedList->state == ListState::UPDATE_PENDING) {
-					HandleConfiguration();
-				}
-			}
-			__finally {
-				ReleaseMutex(hGlobalMutex);
-			}
+			requestedState = pSharedList->state;
+			ReleaseMutex(hGlobalMutex);
+		}
+		if (pSharedList->state == ListState::QUIT) {
+			HandleTermination();
+			isRunning = false;
+		}
+		else if (pSharedList->state == ListState::UPDATE_PENDING) {
+			HandleConfiguration();
 		}
 	}
 	fmt::print("ONNX manager correctly terminated.\n");
@@ -126,11 +124,10 @@ void ManagerONNX::HandleConfiguration()
 		configSuccess = false;
 	}
 
-	if (!configSuccess) {
-		pSharedList->state = ListState::ERROR_DETECTED;
-	}
-	else {
-		pSharedList->state = ListState::CONFIGURED;
+	DWORD waitMutex = WaitForSingleObject(hGlobalMutex, INFINITE);
+	if (waitMutex == WAIT_OBJECT_0 || waitMutex == WAIT_ABANDONED) {
+		pSharedList->state = configSuccess ? ListState::CONFIGURED : ListState::ERROR_DETECTED;
+		ReleaseMutex(hGlobalMutex);
 	}
 
 	// Notify the external program that all threads started and configured correctly
