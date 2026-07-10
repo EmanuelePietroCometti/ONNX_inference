@@ -184,17 +184,38 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         outputNamesC.size()
     );
 
-    // Post processing results
-    float* pScore = outputTensors[0].GetTensorMutableData<float>();
-    outAnomalyScore = pScore[0];
+    // Post processing results.
+    // Do NOT assume the graph output order: identify the scalar score and the
+    // spatial anomaly map by inspecting each tensor's shape. Indexing the wrong
+    // tensor here means reading garbage dimensions and crashing inside OpenCV.
+    int scoreIdx = -1;
+    int mapIdx = -1;
+    for (size_t idx = 0; idx < outputTensors.size(); ++idx) {
+        auto info = outputTensors[idx].GetTensorTypeAndShapeInfo();
+        std::vector<int64_t> shape = info.GetShape();
+
+        if (info.GetElementCount() == 1 && scoreIdx < 0) {
+            scoreIdx = static_cast<int>(idx); // Single element -> anomaly score
+        }
+        else if (shape.size() >= 3 && mapIdx < 0) {
+            mapIdx = static_cast<int>(idx); // (N,C,H,W) or (N,H,W) -> anomaly map
+        }
+    }
+
+    if (scoreIdx < 0) {
+        throw std::runtime_error("Anomaly model does not expose a scalar score output.");
+    }
+
+    outAnomalyScore = outputTensors[scoreIdx].GetTensorMutableData<float>()[0];
     outStatus = (outAnomalyScore > 0.5f) ? "REJECT" : "OK";
 
-    // The heatmap is only available if the model exposes a second output (e.g. "anomaly_map")
-    if (pOutputHeatmap && outputTensors.size() > 1) {
-        auto heatmapShape = outputTensors[1].GetTensorTypeAndShapeInfo().GetShape();
-        int64_t hmHeight = heatmapShape[2];
-        int64_t hmWidth = heatmapShape[3];
-        float* pHeatmap = outputTensors[1].GetTensorMutableData<float>();
+    // The heatmap is only written if the model actually exposes a spatial map output
+    if (pOutputHeatmap && mapIdx >= 0) {
+        auto heatmapShape = outputTensors[mapIdx].GetTensorTypeAndShapeInfo().GetShape();
+        // Spatial dims are always the last two, regardless of rank (N,C,H,W) or (N,H,W)
+        int64_t hmHeight = heatmapShape[heatmapShape.size() - 2];
+        int64_t hmWidth = heatmapShape[heatmapShape.size() - 1];
+        float* pHeatmap = outputTensors[mapIdx].GetTensorMutableData<float>();
 
         // Wrap the raw float output into a 1-channel OpenCV Mat
         cv::Mat floatHeatmap(static_cast<int>(hmHeight), static_cast<int>(hmWidth), CV_32FC1, pHeatmap);
