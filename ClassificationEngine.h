@@ -21,4 +21,13 @@ private:
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> session;
     Ort::MemoryInfo memoryInfo{ nullptr };
+
+    // I/O names and input shape extracted from the model graph at Initialize time,
+    // so Infer never relies on hardcoded names or dimensions
+    std::string inputName;
+    std::vector<std::string> outputNames;
+    std::vector<int64_t> inputShape;
+    int64_t modelChannels = 3;
+    int64_t modelHeight = 0;
+    int64_t modelWidth = 0;
 };

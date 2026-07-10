@@ -105,7 +105,21 @@ void ManagerONNX::HandleConfiguration()
 	catch (const std::exception& e) {
 		DWORD idPunto = pSharedList->points[i].idPunto;
 		fmt::print(stderr, "### ERROR DURING CONFIGURATION: {}\n", e.what());
-		activeWorkers[idPunto]->MarkAsError();
+
+		// If the WorkerONNX constructor threw, operator[] already inserted a NULL
+		// unique_ptr for this id: calling MarkAsError() through it would dereference
+		// a null pointer. In that case the worker never opened its local mutex either,
+		// so write the error state directly into shared memory (the global mutex is
+		// already held by Run()).
+		auto it = activeWorkers.find(idPunto);
+		if (it != activeWorkers.end() && it->second) {
+			it->second->MarkAsError();
+		}
+		else {
+			pSharedList->points[i].status = PointState::ERROR_DETECTED;
+			fmt::print("Worker {} ERROR_DETECTED (construction failed)\n", idPunto);
+			activeWorkers.erase(idPunto);
+		}
 		configSuccess = false;
 	}
 
