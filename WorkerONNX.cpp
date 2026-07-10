@@ -127,7 +127,7 @@ void WorkerONNX::InferenceLoop()
 			}
 			catch (const std::exception& e) {
 				fmt::print(stderr, "### AI INFERENCE EXCEPTION ON CP {}: {}\n", controlPointData->idPunto, e.what());
-				inferenceError = false;
+				inferenceError = true;
 			}
 
 			fmt::print("Control point: {} - Inference finished!\n", controlPointData->idPunto);
@@ -151,10 +151,17 @@ void WorkerONNX::InferenceLoop()
 					responseJson["status"] = statusStr; // Stored as a string
 				}
 				else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
-					// For classification, statusStr holds the class ID. 
-					// Convert it to int so it appears as a number in the JSON, not a string.
-					responseJson["class_id"] = stoi(statusStr);
-					responseJson["confidence"] = anomalyScore;
+					// For classification, statusStr holds the class ID.
+					// On inference error statusStr is "ERROR", not a number: stoi would throw
+					// with the mutex held and kill the worker thread.
+					if (!inferenceError) {
+						responseJson["class_id"] = stoi(statusStr);
+						responseJson["confidence"] = anomalyScore;
+					}
+					else {
+						responseJson["class_id"] = -1;
+						responseJson["confidence"] = 0.0f;
+					}
 				}
 
 				// Dump the JSON object to a standard string (compact, no indent)

@@ -51,16 +51,19 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
     try {
         Ort::AllocatorWithDefaultOptions allocator;
 
-        // Extract Input Name dynamically
+        // Extract Input Name dynamically and store it for Infer
         auto inputNamePtr = session->GetInputNameAllocated(0, allocator);
-        std::string inputNameStr = inputNamePtr.get();
-        const char* inputNames[] = { inputNameStr.c_str() };
+        inputName = inputNamePtr.get();
+        const char* inputNames[] = { inputName.c_str() };
 
-        // Extract Output Name dynamically 
-        // (Even if the model has multiple outputs, requesting the first one forces the whole graph to execute)
-        auto outputNamePtr = session->GetOutputNameAllocated(0, allocator);
-        std::string outputNameStr = outputNamePtr.get();
-        const char* outputNames[] = { outputNameStr.c_str() };
+        // Extract ALL Output Names dynamically and store them for Infer
+        // (Requesting the first one is enough to force the whole graph to execute during warmup)
+        outputNames.clear();
+        for (size_t idx = 0; idx < session->GetOutputCount(); ++idx) {
+            auto outputNamePtr = session->GetOutputNameAllocated(idx, allocator);
+            outputNames.emplace_back(outputNamePtr.get());
+        }
+        const char* warmupOutputNames[] = { outputNames[0].c_str() };
 
         // Extract Input Shape
         Ort::TypeInfo typeInfo = session->GetInputTypeInfo(0);
@@ -88,7 +91,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         // This triggers TensorRT engine building and GPU memory allocation
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, outputNames, 1);
+        session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, warmupOutputNames, 1);
 
         auto endTime = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
@@ -164,25 +167,30 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
     );
 
 
-    // Run inference
-    const char* inputNames[] = { "input" };
-    const char* outputNames[] = { "output", "anomaly_map" };
+    // Run inference using the names extracted from the model graph in Initialize
+    const char* inputNamesC[] = { inputName.c_str() };
+    std::vector<const char*> outputNamesC;
+    outputNamesC.reserve(outputNames.size());
+    for (const auto& name : outputNames) {
+        outputNamesC.push_back(name.c_str());
+    }
 
     auto outputTensors = session->Run(
         Ort::RunOptions{ nullptr },
-        inputNames,
+        inputNamesC,
         &inputTensor,
         1,
-        outputNames,
-        2
+        outputNamesC.data(),
+        outputNamesC.size()
     );
 
-    // Post processing results 
+    // Post processing results
     float* pScore = outputTensors[0].GetTensorMutableData<float>();
     outAnomalyScore = pScore[0];
     outStatus = (outAnomalyScore > 0.5f) ? "REJECT" : "OK";
 
-    if (pOutputHeatmap) {
+    // The heatmap is only available if the model exposes a second output (e.g. "anomaly_map")
+    if (pOutputHeatmap && outputTensors.size() > 1) {
         auto heatmapShape = outputTensors[1].GetTensorTypeAndShapeInfo().GetShape();
         int64_t hmHeight = heatmapShape[2];
         int64_t hmWidth = heatmapShape[3];

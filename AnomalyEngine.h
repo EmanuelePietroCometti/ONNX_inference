@@ -17,4 +17,9 @@ private:
 	std::unique_ptr<Ort::Env> env;
 	std::unique_ptr<Ort::Session> session;
 	Ort::MemoryInfo memoryInfo{ nullptr };
+
+	// I/O names extracted from the model graph at Initialize time,
+	// so Infer never relies on hardcoded names
+	std::string inputName;
+	std::vector<std::string> outputNames;
 };
