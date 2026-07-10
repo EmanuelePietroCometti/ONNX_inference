@@ -32,8 +32,11 @@ void ManagerONNX::Run()
 		// ONNX manager waits for a signal from the external program to start
 		WaitForSingleObject(hEventTrigger, INFINITE);
 
+		// WAIT_ABANDONED still grants ownership (previous owner crashed while
+		// holding the mutex): it MUST be handled like WAIT_OBJECT_0, otherwise
+		// the mutex is acquired here and never released, deadlocking both processes
 		DWORD waitMutex = WaitForSingleObject(hGlobalMutex, INFINITE);
-		if (waitMutex == WAIT_OBJECT_0) {
+		if (waitMutex == WAIT_OBJECT_0 || waitMutex == WAIT_ABANDONED) {
 			__try {
 				if (pSharedList->state == ListState::QUIT) {
 					HandleTermination();

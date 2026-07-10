@@ -44,7 +44,7 @@ void WorkerONNX::Start()
 void WorkerONNX::Stop()
 {
 	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
-	if (waitRes == WAIT_OBJECT_0)
+	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
 		fmt::print(">> Worker {} shutdown pending...\n", controlPointData->idPunto);
 		controlPointData->status = PointState::QUIT;
@@ -64,7 +64,7 @@ void WorkerONNX::Stop()
 void WorkerONNX::MarkAsConfigured()
 {
 	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
-	if (waitRes == WAIT_OBJECT_0)
+	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
 		controlPointData->status = PointState::CONFIGURED;
 		fmt::print("Worker {} CONFIGURED\n", controlPointData->idPunto);
@@ -75,7 +75,7 @@ void WorkerONNX::MarkAsConfigured()
 void WorkerONNX::MarkAsError()
 {
 	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
-	if (waitRes == WAIT_OBJECT_0)
+	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
 		controlPointData->status = PointState::ERROR_DETECTED;
 		fmt::print("Worker {} ERROR_DETECTED\n", controlPointData->idPunto);
@@ -94,7 +94,7 @@ void WorkerONNX::InferenceLoop()
 
 		// Lock acquire 
 		DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
-		if (waitRes == WAIT_OBJECT_0) {
+		if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED) {
 			// Check if the state is QUIT or UPDATE_PENDING
 			if (controlPointData->status == PointState::QUIT || controlPointData->status == PointState::UPDATE_PENDING) {
 				shouldQuit = true;
@@ -135,7 +135,7 @@ void WorkerONNX::InferenceLoop()
 
 			// SYNCHRONIZE STATE AND JSON
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
-			if (resWait == WAIT_OBJECT_0) {
+			if (resWait == WAIT_OBJECT_0 || resWait == WAIT_ABANDONED) {
 				if (!inferenceError) {
 					controlPointData->results.state = InferenceState::RESULT_READY;
 				}
