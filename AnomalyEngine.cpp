@@ -6,6 +6,7 @@
 #include <cstring>
 #include <chrono>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <opencv2/opencv.hpp>
 
@@ -140,17 +141,23 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo, dummyInput.data(), dummyInput.size(), inputShape.data(), inputShape.size());
 
-        // Execute Warmup Run
-        // This triggers TensorRT engine building and GPU memory allocation
-        auto startTime = std::chrono::high_resolution_clock::now();
+        // Execute Warmup Runs
+        // The first run triggers engine building (TensorRT/OpenVINO compilation) and
+        // memory allocation; the following ones stabilize the execution path so the
+        // first REAL frame does not hit a cold engine. This happens at Configure
+        // time, before the camera trigger starts.
+        constexpr int kWarmupRuns = 3;
+        double firstMs = 0.0;
+        double lastMs = 0.0;
+        for (int r = 0; r < kWarmupRuns; ++r) {
+            auto startTime = std::chrono::steady_clock::now();
+            session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, warmupOutputNames, 1);
+            lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
+            if (r == 0) firstMs = lastMs;
+        }
 
-        session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, warmupOutputNames, 1);
-
-        auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-
-
-        fmt::print("Warmup completed successfully in {} ms. Engine is locked and ready for real-time inference.\n", duration.count());
+        fmt::print("Warmup completed successfully: {} runs, first {:.1f} ms, last {:.1f} ms. Engine is locked and ready for real-time inference.\n",
+            kWarmupRuns, firstMs, lastMs);
 
     }
     catch (const Ort::Exception& e) {

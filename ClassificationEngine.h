@@ -30,4 +30,8 @@ private:
     int64_t modelChannels = 3;
     int64_t modelHeight = 0;
     int64_t modelWidth = 0;
+
+    // Input tensor buffer allocated once at Initialize and reused on every Infer,
+    // avoiding a per-frame heap allocation of the whole CHW tensor
+    std::vector<float> inputTensorValues;
 };

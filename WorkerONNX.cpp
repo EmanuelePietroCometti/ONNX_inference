@@ -104,10 +104,11 @@ void WorkerONNX::InferenceLoop()
 
 			if (shouldQuit) break;
 
-			fmt::print("Control point: {} - Inference running...\n", controlPointData->idPunto);
-
 			float anomalyScore = 0.0f;
 			std::string statusStr = "ERROR";
+
+			// Measure the end-to-end inference latency (preprocess + Run + postprocess)
+			const auto inferStart = std::chrono::steady_clock::now();
 
 			try {
 				// Call the ONNX Engine if successfully initialized and memory is mapped
@@ -130,7 +131,8 @@ void WorkerONNX::InferenceLoop()
 				inferenceError = true;
 			}
 
-			fmt::print("Control point: {} - Inference finished!\n", controlPointData->idPunto);
+			const double inferMs = std::chrono::duration<double, std::milli>(
+				std::chrono::steady_clock::now() - inferStart).count();
 
 
 			// SYNCHRONIZE STATE AND JSON
@@ -173,7 +175,8 @@ void WorkerONNX::InferenceLoop()
 				// Copy the safely generated JSON directly into shared memory
 				wcscpy_s(controlPointData->results.json, 1024, wJsonPayload.c_str());
 
-				fmt::print("Worker {} results copied: {}\n", controlPointData->idPunto, serializedJson);
+				// Single consolidated per-frame log line: keeps console I/O out of the hot path
+				fmt::print("Worker {} | infer {:.1f} ms | {}\n", controlPointData->idPunto, inferMs, serializedJson);
 
 				ReleaseMutex(hLocalMutex);
 				SetEvent(hEventResults);
