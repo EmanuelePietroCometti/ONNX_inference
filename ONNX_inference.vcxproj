@@ -100,13 +100,26 @@
   <!-- Selezione del runtime ONNX in base alla configurazione:
        Debug/Release          -> pacchetto GPU (TensorRT/CUDA)
        *-OpenVINO             -> pacchetto ottimizzato OpenVINO (Intel CPU/iGPU/NPU) -->
+  <PropertyGroup Label="SdkPaths">
+    <SdkRoot>$(ProjectDir)SDK\</SdkRoot>
+    <FmtDir>$(SdkRoot)fmt-11.1.4</FmtDir>
+    <OpenCVDir>$(SdkRoot)opencv\build</OpenCVDir>
+    <JsonDir>$(SdkRoot)nlohmann_json</JsonDir>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Release'">
-    <OrtDir>$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4</OrtDir>
+    <OrtDir>$(SdkRoot)onnxruntime-win-x64-gpu-1.24.4</OrtDir>
     <OrtEpDefine>ORT_EP_GPU</OrtEpDefine>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Release-OpenVINO'">
-    <OrtDir>$(ProjectDir)SDK\onnxruntime-win-x64-openvino</OrtDir>
+    <OrtDir>$(SdkRoot)onnxruntime_openvino</OrtDir>
     <OrtEpDefine>ORT_EP_OPENVINO</OrtEpDefine>
+  </PropertyGroup>
+  <!-- Nome libreria OpenCV: suffisso 'd' solo per build Debug -->
+  <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO'">
+    <OpenCVLibName>opencv_world4120d</OpenCVLibName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO'">
+    <OpenCVLibName>opencv_world4120</OpenCVLibName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -140,19 +153,19 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir)\SDK\fmt-11.1.4\include;$(OrtDir)\include;$(ProjectDir)\SDK\opencv\build\include;$(ProjectDir)\SDK\nlohmann_json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(ProjectDir)\SDK\opencv\build\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;opencv_world4120d.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /y /d "$(ProjectDir)\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO')">
@@ -163,19 +176,19 @@ xcopy /y /d "$(ProjectDir)\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" 
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(ProjectDir)\SDK\fmt-11.1.4\include;$(OrtDir)\include;$(ProjectDir)\SDK\opencv\build\include;$(ProjectDir)\SDK\nlohmann_json\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(ProjectDir)\SDK\opencv\build\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;opencv_world4120.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /y /d "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /y /d "$(ProjectDir)\SDK\opencv\build\x64\vc16\bin\opencv_world4120*.dll" "$(OutDir)"</Command>
+      <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

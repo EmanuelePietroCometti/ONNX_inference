@@ -1,11 +1,8 @@
 #include "AnomalyEngine.h"
 #include <fmt/core.h>
-<<<<<<< Updated upstream
 #include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
 #include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
-=======
 #include <algorithm>
->>>>>>> Stashed changes
 #include <cstring>
 #include <chrono>
 #include <string>
@@ -32,7 +29,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
     // Hardware Acceleration Setup (OpenVINO build: Intel GPU -> CPU via device AUTO)
     try {
         std::unordered_map<std::string, std::string> ov_options;
-        ov_options["device_type"] = "AUTO:GPU,CPU"; // Prefer Intel GPU, fall back to CPU plugin
+        ov_options["device_type"] = "CPU"; // Prefer Intel GPU, fall back to CPU plugin
         sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
         hardwareAccelerated = true;
         fmt::print("OpenVINO Execution Provider appended successfully.\n");
@@ -181,9 +178,9 @@ void AnomalyEngine::LoadNormalizationMetadata()
         return false;
     };
 
-    const bool hasMin = lookupFloat({ "global_min", "min" }, globalMin);
-    const bool hasMax = lookupFloat({ "global_max", "max" }, globalMax);
-    const bool hasThreshold = lookupFloat({ "image_threshold", "threshold", "global_threshold" }, rawThreshold);
+    const bool hasMin = lookupFloat({ "calibration_global_min", "min" }, globalMin);
+    const bool hasMax = lookupFloat({ "calibration_global_max", "max" }, globalMax);
+    const bool hasThreshold = lookupFloat({ "calibrated_threshold", "threshold", "global_threshold" }, rawThreshold);
 
     if (!hasMin || !hasMax || !hasThreshold) {
         fmt::print(stderr,
