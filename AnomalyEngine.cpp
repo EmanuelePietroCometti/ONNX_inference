@@ -1,7 +1,11 @@
 #include "AnomalyEngine.h"
 #include <fmt/core.h>
+<<<<<<< Updated upstream
 #include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
 #include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
+=======
+#include <algorithm>
+>>>>>>> Stashed changes
 #include <cstring>
 #include <chrono>
 #include <string>
@@ -96,6 +100,10 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
     fmt::print("ONNX Session created successfully for Anomaly Detection.\n");
 
+    // Read global_min / global_max / threshold from the ONNX metadata and
+    // pre-compute the normalized threshold used at inference time
+    LoadNormalizationMetadata();
+
     try {
         Ort::AllocatorWithDefaultOptions allocator;
 
@@ -152,6 +160,51 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         fmt::print(stderr, "### ERROR DURING WARMUP: {}\n", e.what());
         throw; // Escalate the error, as an un-warmed engine cannot guarantee production timings
     }
+}
+
+void AnomalyEngine::LoadNormalizationMetadata()
+{
+    Ort::AllocatorWithDefaultOptions allocator;
+    Ort::ModelMetadata metadata = session->GetModelMetadata();
+
+    // Different export pipelines embed the same value under different keys,
+    // so each stat is looked up through a list of known aliases
+    auto lookupFloat = [&](std::initializer_list<const char*> keys, float& target) -> bool {
+        for (const char* key : keys) {
+            auto value = metadata.LookupCustomMetadataMapAllocated(key, allocator);
+            if (value) {
+                target = std::stof(value.get());
+                fmt::print("Metadata '{}' = {}\n", key, target);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const bool hasMin = lookupFloat({ "global_min", "min" }, globalMin);
+    const bool hasMax = lookupFloat({ "global_max", "max" }, globalMax);
+    const bool hasThreshold = lookupFloat({ "image_threshold", "threshold", "global_threshold" }, rawThreshold);
+
+    if (!hasMin || !hasMax || !hasThreshold) {
+        fmt::print(stderr,
+            "### WARNING: normalization metadata incomplete (min:{} max:{} threshold:{}). "
+            "Falling back to defaults, scores will NOT match the Python model.\n",
+            hasMin, hasMax, hasThreshold);
+    }
+
+    // Guard against a degenerate range that would divide by zero
+    const float range = globalMax - globalMin;
+    if (range <= 0.0f) {
+        throw std::runtime_error("Invalid normalization metadata: global_max must be greater than global_min.");
+    }
+
+    // Same min-max mapping Anomalib applies in Python: comparing the normalized
+    // score against this normalized threshold is equivalent to comparing the raw
+    // score against the raw threshold, so the OK/REJECT decision is identical
+    normalizedThreshold = (rawThreshold - globalMin) / range;
+
+    fmt::print("Normalization ready: globalMin={}, globalMax={}, rawThreshold={}, normalizedThreshold={}\n",
+        globalMin, globalMax, rawThreshold, normalizedThreshold);
 }
 
 void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
@@ -254,8 +307,12 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         throw std::runtime_error("Anomaly model does not expose a scalar score output.");
     }
 
-    outAnomalyScore = outputTensors[scoreIdx].GetTensorMutableData<float>()[0];
-    outStatus = (outAnomalyScore > 0.5f) ? "REJECT" : "OK";
+    // Min-max normalize the raw score with the global stats read from the ONNX
+    // metadata, then decide against the normalized threshold: this reproduces
+    // exactly the post-processing of the Python (Anomalib) pipeline
+    const float rawScore = outputTensors[scoreIdx].GetTensorMutableData<float>()[0];
+    outAnomalyScore = std::clamp((rawScore - globalMin) / (globalMax - globalMin), 0.0f, 1.0f);
+    outStatus = (outAnomalyScore > normalizedThreshold) ? "REJECT" : "OK";
 
     // The heatmap is only written if the model actually exposes a spatial map output
     if (pOutputHeatmap && mapIdx >= 0) {
@@ -268,9 +325,12 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         // Wrap the raw float output into a 1-channel OpenCV Mat
         cv::Mat floatHeatmap(static_cast<int>(hmHeight), static_cast<int>(hmWidth), CV_32FC1, pHeatmap);
 
-        // Normalize automatically using OpenCV (0-255 uint8)
+        // Normalize with the GLOBAL min/max from the model metadata (not the
+        // per-image min/max): the heatmap intensity stays comparable across
+        // frames and matches the Python pipeline
+        cv::Mat normHeatmap = (floatHeatmap - globalMin) / (globalMax - globalMin);
         cv::Mat uint8Heatmap;
-        cv::normalize(floatHeatmap, uint8Heatmap, 0, 255, cv::NORM_MINMAX, CV_8UC1);
+        normHeatmap.convertTo(uint8Heatmap, CV_8UC1, 255.0, 0.0); // convertTo saturates to [0,255]
 
         // Resize back to original camera resolution
         cv::Mat largeHeatmap;
