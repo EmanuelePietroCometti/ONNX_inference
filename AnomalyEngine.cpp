@@ -1,7 +1,11 @@
 #include "AnomalyEngine.h"
 #include <fmt/core.h>
+#include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
+#include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
 #include <cstring>
 #include <chrono>
+#include <string>
+#include <unordered_map>
 #include <opencv2/opencv.hpp>
 
 AnomalyEngine::AnomalyEngine()
@@ -16,10 +20,24 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
     Ort::SessionOptions sessionOptions;
 
     // Threading optimizations
-    sessionOptions.SetIntraOpNumThreads(1); // Usually 1 per worker thread to avoid context switching
     sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-    // Hardware Acceleration Setup (Order matters: TRT -> CUDA -> CPU)
+    bool hardwareAccelerated = false;
+
+#if defined(ORT_EP_OPENVINO)
+    // Hardware Acceleration Setup (OpenVINO build: Intel GPU -> CPU via device AUTO)
+    try {
+        std::unordered_map<std::string, std::string> ov_options;
+        ov_options["device_type"] = "AUTO:GPU,CPU"; // Prefer Intel GPU, fall back to CPU plugin
+        sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
+        hardwareAccelerated = true;
+        fmt::print("OpenVINO Execution Provider appended successfully.\n");
+    }
+    catch (const Ort::Exception& e) {
+        fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
+    }
+#else
+    // Hardware Acceleration Setup (GPU build, order matters: TRT -> CUDA -> CPU)
     try {
         OrtTensorRTProviderOptions trt_options{};
         trt_options.device_id = 0;
@@ -28,6 +46,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         trt_options.trt_engine_cache_path = "./trt_cache";
 
         sessionOptions.AppendExecutionProvider_TensorRT(trt_options);
+		hardwareAccelerated = true;
         fmt::print("TensorRT Execution Provider appended successfully.\n");
     }
     catch (const Ort::Exception& e) {
@@ -38,10 +57,39 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         OrtCUDAProviderOptions cuda_options{};
         cuda_options.device_id = 0;
         sessionOptions.AppendExecutionProvider_CUDA(cuda_options);
+		hardwareAccelerated = true;
         fmt::print("CUDA Execution Provider appended successfully.\n");
     }
     catch (const Ort::Exception& e) {
         fmt::print(stderr, "CUDA not available, falling back to CPU: {}\n", e.what());
+    }
+#endif
+
+    // Dynamic Context Switching based on Execution Provider
+    if (hardwareAccelerated) {
+        // GPU Mode: Keep threading to 1 to feed the GPU efficiently without CPU context switching
+        sessionOptions.SetIntraOpNumThreads(1);
+    }
+    else {
+        // CPU Fallback Mode: Maximize x64 architecture utilization
+        fmt::print(stderr, "WARNING: Initializing CPU Fallback with aggressive optimizations.\n");
+
+        // Enable memory arena to avoid continuous OS memory allocations
+        sessionOptions.EnableCpuMemArena();
+
+        // Sequential execution avoids locking overhead on CPU
+        sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+
+        // Thread tuning: If this AnomalyEngine is the ONLY worker, use physical cores.
+        // NOTE: If you are spawning multiple AnomalyEngine instances in custom C++ threads,
+        // leave this at 1 to prevent OS thread thrashing.
+        unsigned int physicalCores = std::thread::hardware_concurrency() / 2;
+        sessionOptions.SetIntraOpNumThreads(physicalCores > 0 ? physicalCores : 1);
+
+        // Hardware Math: Enable Flush-To-Zero (FTZ) and Denormals-Are-Zero (DAZ).
+        // This prevents catastrophic CPU slowdowns when dealing with near-zero floats in CNNs.
+        _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+        _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
     }
 
     // Create the session

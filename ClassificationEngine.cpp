@@ -2,6 +2,8 @@
 #include <fmt/core.h>
 #include <cstring>
 #include <chrono>
+#include <string>
+#include <unordered_map>
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 
@@ -17,7 +19,19 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     sessionOptions.SetIntraOpNumThreads(1);
     sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-    // Setup hardware acceleration (TensorRT -> CUDA -> CPU)
+#if defined(ORT_EP_OPENVINO)
+    // Setup hardware acceleration (OpenVINO build: Intel GPU -> CPU via device AUTO)
+    try {
+        std::unordered_map<std::string, std::string> ov_options;
+        ov_options["device_type"] = "AUTO:GPU,CPU";
+        sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
+        fmt::print("OpenVINO Execution Provider appended successfully for Classification.\n");
+    }
+    catch (const Ort::Exception& e) {
+        fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
+    }
+#else
+    // Setup hardware acceleration (GPU build: TensorRT -> CUDA -> CPU)
     try {
         OrtTensorRTProviderOptions trt_options{};
         trt_options.device_id = 0;
@@ -30,6 +44,7 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     catch (const Ort::Exception& e) {
         fmt::print(stderr, "TensorRT not available, falling back to CUDA: {}\n", e.what());
     }
+#endif
 
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
 
