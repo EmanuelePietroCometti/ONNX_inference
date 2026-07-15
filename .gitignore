@@ -366,4 +366,5 @@ trt_cache/
 LocalConfig.props
 LocalConfig_Debug.props
 LocalConfig_Release.props
-SDK/*.diagsession
+SDK/
+*.diagsession

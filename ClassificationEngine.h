@@ -4,6 +4,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
+#include <opencv2/opencv.hpp>
 
 class ClassificationEngine : public IEngine {
 public:
@@ -34,4 +35,11 @@ private:
     // Input tensor buffer allocated once at Initialize and reused on every Infer,
     // avoiding a per-frame heap allocation of the whole CHW tensor
     std::vector<float> inputTensorValues;
+
+
+    double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
+    double maxRun = 0; 
+    int frameCount = 0;
+
+    std::vector<cv::Mat> m_splitPlanes;
 };

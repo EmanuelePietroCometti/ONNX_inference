@@ -7,7 +7,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <opencv2/opencv.hpp>
 #include <algorithm>
 
 ClassificationEngine::ClassificationEngine()
@@ -19,13 +18,13 @@ ClassificationEngine::ClassificationEngine()
 void ClassificationEngine::Initialize(const std::wstring& modelPath)
 {
     Ort::SessionOptions sessionOptions;
-    sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     bool hardwareAccelerated = false;
 
 #if defined(ORT_EP_GPU)
     // Setup hardware acceleration (GPU build: TensorRT -> CUDA -> CPU)
     try {
+        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         OrtTensorRTProviderOptions trt_options{};
         trt_options.device_id = 0;
         trt_options.trt_fp16_enable = 1;
@@ -42,13 +41,23 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
 #elif defined(ORT_EP_OPENVINO)
     // Setup hardware acceleration (OpenVINO build: Intel GPU -> CPU via device AUTO)
     try {
+        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
+        unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
+
         std::unordered_map<std::string, std::string> ov_options;
         ov_options["device_type"] = "CPU";
+        ov_options["precision"] = "FP32";
+        ov_options["num_streams"] = "1";
+        ov_options["num_of_threads"] = std::to_string(physicalCores);
+
         sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
         hardwareAccelerated = true;
         fmt::print("OpenVINO Execution Provider appended successfully for Classification.\n");
     }
     catch (const Ort::Exception& e) {
+        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL); 
+        unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
+        sessionOptions.SetIntraOpNumThreads(physicalCores);
         fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
     }
 
@@ -75,11 +84,6 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
         sessionOptions.EnableCpuMemArena();
         sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
 
-        // NOTE: with multiple concurrent workers (NUM_CONTROL_POINTS > 1) consider
-        // dividing the cores among them to avoid thread thrashing
-        unsigned int physicalCores = std::thread::hardware_concurrency() / 2;
-        sessionOptions.SetIntraOpNumThreads(physicalCores > 0 ? physicalCores : 1);
-
         // Flush-To-Zero / Denormals-Are-Zero: prevents catastrophic slowdowns on near-zero floats
         _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
         _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
@@ -103,10 +107,10 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     inputShape = tensorInfo.GetShape();
 
     // Handle dynamic dimensions (exported as -1 in ONNX):
-    // force batch size to 1 and fall back to 256x256 for dynamic spatial dims
+    // force batch size to 1 and fall back to 224x224 for dynamic spatial dims
     if (inputShape[0] <= 0) inputShape[0] = 1;
-    if (inputShape[2] <= 0) inputShape[2] = 256;
-    if (inputShape[3] <= 0) inputShape[3] = 256;
+    if (inputShape[2] <= 0) inputShape[2] = 224;
+    if (inputShape[3] <= 0) inputShape[3] = 224;
 
     modelChannels = inputShape[1];
     modelHeight = inputShape[2];
@@ -147,62 +151,97 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
 void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
     void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
 {
-    // Shape extracted from the model graph in Initialize
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Wrap the raw pointer into a cv::Mat without copying data
     cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
     cv::Mat resizeImage;
+
+    // Resize using Nearest Neighbor interpolation for maximum CPU speed
     cv::resize(rawImg, resizeImage,
         cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)),
-        0, 0, cv::INTER_LINEAR);
+        0, 0, cv::INTER_NEAREST);
 
-    // Standard ImageNet normalization (Matching AnomalyEngine)
+    auto t1 = std::chrono::steady_clock::now();
+
+    // Standard ImageNet normalization parameters
     const float mean[] = { 0.485f, 0.456f, 0.406f };
     const float stddev[] = { 0.229f, 0.224f, 0.225f };
 
-    // Vectorized HWC -> CHW conversion: split the interleaved image into planes,
-    // then let convertTo apply scale/offset with SIMD directly into the (reused)
-    // tensor buffer. Replaces the previous per-pixel scalar loop.
+    // Ensure the split planes vector is pre-allocated to avoid heap allocations
+    if (m_splitPlanes.empty()) {
+        m_splitPlanes.resize(modelChannels);
+    }
+
+    // Vectorized HWC -> CHW conversion
     const size_t planeSize = static_cast<size_t>(modelHeight) * static_cast<size_t>(modelWidth);
-    std::vector<cv::Mat> planes8u;
-    cv::split(resizeImage, planes8u);
+    cv::split(resizeImage, m_splitPlanes);
+
     for (int c = 0; c < modelChannels; ++c) {
         const float scale = 1.0f / (255.0f * stddev[c]);
         const float offset = mean[c] / stddev[c];
-        // Wrapper Mat aliasing the tensor buffer: convertTo writes in place, no copy
+
+        // Wrapper Mat aliasing the contiguous tensor buffer: convertTo writes in-place
         cv::Mat planeF32(static_cast<int>(modelHeight), static_cast<int>(modelWidth), CV_32FC1,
             inputTensorValues.data() + static_cast<size_t>(c) * planeSize);
-        planes8u[c].convertTo(planeF32, CV_32FC1, scale, -offset);
+        m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
+    // Create the input tensor wrapping the pre-allocated and populated buffer
     Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
         memoryInfo, inputTensorValues.data(), inputTensorValues.size(), inputShape.data(), inputShape.size());
 
-    // Use the I/O names extracted from the model graph in Initialize
     const char* inputNamesC[] = { inputName.c_str() };
-    std::vector<const char*> outputNamesC;
-    outputNamesC.reserve(outputNames.size());
-    for (const auto& name : outputNames) {
-        outputNamesC.push_back(name.c_str());
+
+    // Use thread_local to initialize the output names array only once, 
+    // avoiding expensive vector allocations during every frame inference
+    thread_local std::vector<const char*> outputNamesC;
+    if (outputNamesC.empty()) {
+        outputNamesC.reserve(outputNames.size());
+        for (const auto& name : outputNames) {
+            outputNamesC.push_back(name.c_str());
+        }
     }
 
+    auto t2 = std::chrono::steady_clock::now();
+
+    // Execute inference
     auto outputTensors = session->Run(
         Ort::RunOptions{ nullptr }, inputNamesC, &inputTensor, 1, outputNamesC.data(), outputNamesC.size());
 
-    auto outputShape = outputTensors[0].GetTensorTypeAndShapeInfo().GetShape();
+    auto t3 = std::chrono::steady_clock::now();
 
+    // Validate output shape
+    auto outputShape = outputTensors[0].GetTensorTypeAndShapeInfo().GetShape();
     if (outputShape.size() < 2) {
         throw std::runtime_error("Unexpected output tensor shape from Classification model.");
     }
 
-    // The number of classes is the second dimension [1]
+    // Post-processing: Extract probabilities and find the argmax (predicted class)
     const int64_t numClasses = outputShape[1];
     float* pProbs = outputTensors[0].GetTensorMutableData<float>();
 
-    // Find the argmax (index of the highest probability) dynamically
     auto maxElementIter = std::max_element(pProbs, pProbs + numClasses);
     int bestClassId = static_cast<int>(std::distance(pProbs, maxElementIter));
     float bestConfidence = *maxElementIter;
 
-    // Repurpose the interface variables to pass data to WorkerONNX
+    auto t4 = std::chrono::steady_clock::now();
+
+    // Assign outputs for the WorkerONNX pipeline
     outAnomalyScore = bestConfidence;
     outStatus = std::to_string(bestClassId);
+
+    // Profiling and metrics
+    using ms = std::chrono::duration<double, std::milli>;
+    accResize += ms(t1 - t0).count();
+    accNorm += ms(t2 - t1).count();
+    accRun += ms(t3 - t2).count();
+    accPost += ms(t4 - t3).count();
+    maxRun = std::max(maxRun, ms(t3 - t2).count());
+
+    if (++frameCount % 100 == 0) {
+        fmt::print("avg over {}: resize {:.2f} | norm {:.2f} | RUN {:.2f} (max {:.2f}) | post {:.2f}\n",
+            frameCount, accResize / frameCount, accNorm / frameCount,
+            accRun / frameCount, maxRun, accPost / frameCount);
+    }
 }

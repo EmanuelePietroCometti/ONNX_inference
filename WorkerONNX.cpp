@@ -11,9 +11,9 @@
 
 using json = nlohmann::json;
 
-WorkerONNX::WorkerONNX(PTcontrolPoint pPoint) : 
-	controlPointData(pPoint), 
-	hLocalMutex(NULL), 
+WorkerONNX::WorkerONNX(PTcontrolPoint pPoint) :
+	controlPointData(pPoint),
+	hLocalMutex(NULL),
 	hEventReady(NULL), 
 	hEventResults(NULL), 
 	hMMFImage(NULL), 
@@ -85,21 +85,25 @@ void WorkerONNX::MarkAsError()
 
 void WorkerONNX::InferenceLoop()
 {
+	// Boost thread priority to minimize wake-up latency from WaitForSingleObject
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
 	fmt::print(">> Worker thread started for control point: {}\n", controlPointData->idPunto);
 	bool shouldQuit = false;
+	uint32_t frameCounter = 0; // Local counter for throttling logs
+
 	while (!shouldQuit) {
 		bool inferenceError = false;
+
 		// Thread waiting for the signal eventReady
 		WaitForSingleObject(hEventReady, INFINITE);
 
-		// Lock acquire 
+		// Lock acquire for state check
 		DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
 		if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED) {
-			// Check if the state is QUIT or UPDATE_PENDING
 			if (controlPointData->status == PointState::QUIT || controlPointData->status == PointState::UPDATE_PENDING) {
 				shouldQuit = true;
 			}
-
 			ReleaseMutex(hLocalMutex);
 
 			if (shouldQuit) break;
@@ -107,11 +111,10 @@ void WorkerONNX::InferenceLoop()
 			float anomalyScore = 0.0f;
 			std::string statusStr = "ERROR";
 
-			// Measure the end-to-end inference latency (preprocess + Run + postprocess)
+			// Measure the end-to-end inference latency
 			const auto inferStart = std::chrono::steady_clock::now();
 
 			try {
-				// Call the ONNX Engine if successfully initialized and memory is mapped
 				if (aiEngine && pImageBuffer != nullptr && pResImageBuffer != nullptr) {
 					const uint8_t* pRawInput = static_cast<const uint8_t*>(pImageBuffer);
 					uint8_t* pRawHeatmap = static_cast<uint8_t*>(pResImageBuffer);
@@ -134,6 +137,8 @@ void WorkerONNX::InferenceLoop()
 			const double inferMs = std::chrono::duration<double, std::milli>(
 				std::chrono::steady_clock::now() - inferStart).count();
 
+			// Variables for logging outside the mutex
+			std::string serializedJson;
 
 			// SYNCHRONIZE STATE AND JSON
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
@@ -145,17 +150,13 @@ void WorkerONNX::InferenceLoop()
 					controlPointData->results.state = InferenceState::ERROR_DETECTED;
 				}
 
-				// --- Build JSON payload safely using nlohmann/json ---
 				json responseJson;
 
 				if (controlPointData->inferenceType == InferenceType::ANOMALY) {
 					responseJson["anomaly_score"] = anomalyScore;
-					responseJson["status"] = statusStr; // Stored as a string
+					responseJson["status"] = statusStr;
 				}
 				else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
-					// For classification, statusStr holds the class ID.
-					// On inference error statusStr is "ERROR", not a number: stoi would throw
-					// with the mutex held and kill the worker thread.
 					if (!inferenceError) {
 						responseJson["class_id"] = stoi(statusStr);
 						responseJson["confidence"] = anomalyScore;
@@ -166,20 +167,23 @@ void WorkerONNX::InferenceLoop()
 					}
 				}
 
-				// Dump the JSON object to a standard string (compact, no indent)
-				std::string serializedJson = responseJson.dump();
+				serializedJson = responseJson.dump();
 
-				// Convert to wide string to match IPC Shared Memory TCHAR definition
+				// Fast ASCII conversion
 				std::wstring wJsonPayload(serializedJson.begin(), serializedJson.end());
-
-				// Copy the safely generated JSON directly into shared memory
 				wcscpy_s(controlPointData->results.json, 1024, wJsonPayload.c_str());
 
-				// Single consolidated per-frame log line: keeps console I/O out of the hot path
-				fmt::print("Worker {} | infer {:.1f} ms | {}\n", controlPointData->idPunto, inferMs, serializedJson);
-
+				// Release Mutex BEFORE doing any console I/O
 				ReleaseMutex(hLocalMutex);
+
+				// Signal the producer immediately that data is ready
 				SetEvent(hEventResults);
+			}
+
+			// Log only once every 100 frames to keep the hot path clean
+			frameCounter++;
+			if (frameCounter % 100 == 0) {
+				fmt::print("Worker {} | infer {:.1f} ms | {}\n", controlPointData->idPunto, inferMs, serializedJson);
 			}
 		}
 	}
