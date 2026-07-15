@@ -25,6 +25,14 @@
       <Configuration>Release-OpenVINO</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug-CPU|x64">
+      <Configuration>Debug-CPU</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release-CPU|x64">
+      <Configuration>Release-CPU</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -73,6 +81,19 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug-CPU|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-CPU|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -96,10 +117,17 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release-OpenVINO|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug-CPU|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release-CPU|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <!-- Selezione del runtime ONNX in base alla configurazione:
        Debug/Release          -> pacchetto GPU (TensorRT/CUDA)
-       *-OpenVINO             -> pacchetto ottimizzato OpenVINO (Intel CPU/iGPU/NPU) -->
+       *-OpenVINO             -> pacchetto ottimizzato OpenVINO (Intel CPU/iGPU/NPU)
+       *-CPU                  -> pacchetto CPU standard (CPU Execution Provider) -->
   <PropertyGroup Label="SdkPaths">
     <SdkRoot>$(ProjectDir)SDK\</SdkRoot>
     <FmtDir>$(SdkRoot)fmt-11.1.4</FmtDir>
@@ -114,11 +142,15 @@
     <OrtDir>$(SdkRoot)onnxruntime_openvino</OrtDir>
     <OrtEpDefine>ORT_EP_OPENVINO</OrtEpDefine>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug-CPU' or '$(Configuration)'=='Release-CPU'">
+    <OrtDir>$(SdkRoot)onnxruntime-win-x64-1.24.4</OrtDir>
+    <OrtEpDefine>ORT_EP_CPU</OrtEpDefine>
+  </PropertyGroup>
   <!-- Nome libreria OpenCV: suffisso 'd' solo per build Debug -->
-  <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO'">
+  <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Debug-CPU'">
     <OpenCVLibName>opencv_world4120d</OpenCVLibName>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO'">
+  <PropertyGroup Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO' or '$(Configuration)'=='Release-CPU'">
     <OpenCVLibName>opencv_world4120</OpenCVLibName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -147,7 +179,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO')">
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Debug-CPU')">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
@@ -168,7 +200,7 @@
 xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO')">
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO' or '$(Configuration)'=='Release-CPU')">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>

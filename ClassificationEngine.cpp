@@ -23,19 +23,7 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
 
     bool hardwareAccelerated = false;
 
-#if defined(ORT_EP_OPENVINO)
-    // Setup hardware acceleration (OpenVINO build: Intel GPU -> CPU via device AUTO)
-    try {
-        std::unordered_map<std::string, std::string> ov_options;
-        ov_options["device_type"] = "AUTO:GPU,CPU";
-        sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
-        hardwareAccelerated = true;
-        fmt::print("OpenVINO Execution Provider appended successfully for Classification.\n");
-    }
-    catch (const Ort::Exception& e) {
-        fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
-    }
-#else
+#if defined(ORT_EP_GPU)
     // Setup hardware acceleration (GPU build: TensorRT -> CUDA -> CPU)
     try {
         OrtTensorRTProviderOptions trt_options{};
@@ -50,6 +38,28 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     catch (const Ort::Exception& e) {
         fmt::print(stderr, "TensorRT not available, falling back to CUDA: {}\n", e.what());
     }
+
+#elif defined(ORT_EP_OPENVINO)
+    // Setup hardware acceleration (OpenVINO build: Intel GPU -> CPU via device AUTO)
+    try {
+        std::unordered_map<std::string, std::string> ov_options;
+        ov_options["device_type"] = "CPU";
+        sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
+        hardwareAccelerated = true;
+        fmt::print("OpenVINO Execution Provider appended successfully for Classification.\n");
+    }
+    catch (const Ort::Exception& e) {
+        fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
+    }
+
+#elif defined(ORT_EP_CPU)
+    // CPU build: no execution provider is appended, the built-in ONNX Runtime
+    // CPU EP is used. hardwareAccelerated stays false so the CPU-side
+    // optimizations below are applied.
+    fmt::print("CPU build: using the default ONNX Runtime CPU Execution Provider for Classification.\n");
+
+#else
+#error "No execution provider selected: define one of ORT_EP_GPU, ORT_EP_OPENVINO or ORT_EP_CPU."
 #endif
 
     // Dynamic context switching based on the execution provider (same policy as AnomalyEngine)
@@ -58,9 +68,9 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
         sessionOptions.SetIntraOpNumThreads(1);
     }
     else {
-        // CPU fallback: the previous hardcoded SetIntraOpNumThreads(1) forced the whole
+        // CPU EP: the previous hardcoded SetIntraOpNumThreads(1) forced the whole
         // network onto a single core. Use the physical cores instead.
-        fmt::print(stderr, "WARNING: Initializing CPU Fallback with aggressive optimizations.\n");
+        fmt::print(stderr, "WARNING: Initializing CPU Execution Provider with aggressive optimizations.\n");
 
         sessionOptions.EnableCpuMemArena();
         sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
@@ -120,7 +130,7 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     // allocations, the following ones stabilize the execution path. This runs
     // at Configure time, BEFORE the camera trigger starts, so the first real
     // frame does not hit a cold engine (the camera cannot be delayed in production)
-    constexpr int kWarmupRuns = 3;
+    constexpr int kWarmupRuns = 50;
     double firstMs = 0.0;
     double lastMs = 0.0;
     for (int r = 0; r < kWarmupRuns; ++r) {

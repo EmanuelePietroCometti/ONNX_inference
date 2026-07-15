@@ -9,10 +9,14 @@ Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
 		Debug|x86 = Debug|x86
+		Debug-CPU|x64 = Debug-CPU|x64
+		Debug-CPU|x86 = Debug-CPU|x86
 		Debug-OpenVINO|x64 = Debug-OpenVINO|x64
 		Debug-OpenVINO|x86 = Debug-OpenVINO|x86
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
+		Release-CPU|x64 = Release-CPU|x64
+		Release-CPU|x86 = Release-CPU|x86
 		Release-OpenVINO|x64 = Release-OpenVINO|x64
 		Release-OpenVINO|x86 = Release-OpenVINO|x86
 	EndGlobalSection
@@ -21,6 +25,10 @@ Global
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug|x64.Build.0 = Debug|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug|x86.ActiveCfg = Debug|Win32
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug|x86.Build.0 = Debug|Win32
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-CPU|x64.ActiveCfg = Debug-CPU|x64
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-CPU|x64.Build.0 = Debug-CPU|x64
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-CPU|x86.ActiveCfg = Debug-CPU|Win32
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-CPU|x86.Build.0 = Debug-CPU|Win32
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-OpenVINO|x64.ActiveCfg = Debug-OpenVINO|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-OpenVINO|x64.Build.0 = Debug-OpenVINO|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Debug-OpenVINO|x86.ActiveCfg = Debug-OpenVINO|x64
@@ -29,6 +37,10 @@ Global
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release|x64.Build.0 = Release|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release|x86.ActiveCfg = Release|Win32
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release|x86.Build.0 = Release|Win32
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-CPU|x64.ActiveCfg = Release-CPU|x64
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-CPU|x64.Build.0 = Release-CPU|x64
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-CPU|x86.ActiveCfg = Release-CPU|Win32
+		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-CPU|x86.Build.0 = Release-CPU|Win32
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-OpenVINO|x64.ActiveCfg = Release-OpenVINO|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-OpenVINO|x64.Build.0 = Release-OpenVINO|x64
 		{6139A2D0-868A-4A46-9D7E-7038191FC5EE}.Release-OpenVINO|x86.ActiveCfg = Release-OpenVINO|x64

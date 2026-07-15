@@ -26,7 +26,35 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
 
     bool hardwareAccelerated = false;
 
-#if defined(ORT_EP_OPENVINO)
+#if defined(ORT_EP_GPU)
+    // Hardware Acceleration Setup (GPU build, order matters: TRT -> CUDA -> CPU)
+    try {
+        OrtTensorRTProviderOptions trt_options{};
+        trt_options.device_id = 0;
+        trt_options.trt_fp16_enable = 1; // Enable FP16 for massive speedup on modern GPUs
+        trt_options.trt_engine_cache_enable = 1; // Cache engine to disk for fast consecutive warmups
+        trt_options.trt_engine_cache_path = "./trt_cache";
+
+        sessionOptions.AppendExecutionProvider_TensorRT(trt_options);
+        hardwareAccelerated = true;
+        fmt::print("TensorRT Execution Provider appended successfully.\n");
+    }
+    catch (const Ort::Exception& e) {
+        fmt::print(stderr, "TensorRT not available, falling back to CUDA: {}\n", e.what());
+    }
+
+    try {
+        OrtCUDAProviderOptions cuda_options{};
+        cuda_options.device_id = 0;
+        sessionOptions.AppendExecutionProvider_CUDA(cuda_options);
+        hardwareAccelerated = true;
+        fmt::print("CUDA Execution Provider appended successfully.\n");
+    }
+    catch (const Ort::Exception& e) {
+        fmt::print(stderr, "CUDA not available, falling back to CPU: {}\n", e.what());
+    }
+
+#elif defined(ORT_EP_OPENVINO)
     // Hardware Acceleration Setup (OpenVINO build: Intel GPU -> CPU via device AUTO)
     try {
         std::unordered_map<std::string, std::string> ov_options;
@@ -38,33 +66,15 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
     catch (const Ort::Exception& e) {
         fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
     }
+
+#elif defined(ORT_EP_CPU)
+    // CPU build: no execution provider is appended, the built-in ONNX Runtime
+    // CPU EP is used. hardwareAccelerated stays false so the CPU-side
+    // optimizations below are applied.
+    fmt::print("CPU build: using the default ONNX Runtime CPU Execution Provider.\n");
+
 #else
-    // Hardware Acceleration Setup (GPU build, order matters: TRT -> CUDA -> CPU)
-    try {
-        OrtTensorRTProviderOptions trt_options{};
-        trt_options.device_id = 0;
-        trt_options.trt_fp16_enable = 1; // Enable FP16 for massive speedup on modern GPUs
-        trt_options.trt_engine_cache_enable = 1; // Cache engine to disk for fast consecutive warmups
-        trt_options.trt_engine_cache_path = "./trt_cache";
-
-        sessionOptions.AppendExecutionProvider_TensorRT(trt_options);
-		hardwareAccelerated = true;
-        fmt::print("TensorRT Execution Provider appended successfully.\n");
-    }
-    catch (const Ort::Exception& e) {
-        fmt::print(stderr, "TensorRT not available, falling back to CUDA: {}\n", e.what());
-    }
-
-    try {
-        OrtCUDAProviderOptions cuda_options{};
-        cuda_options.device_id = 0;
-        sessionOptions.AppendExecutionProvider_CUDA(cuda_options);
-		hardwareAccelerated = true;
-        fmt::print("CUDA Execution Provider appended successfully.\n");
-    }
-    catch (const Ort::Exception& e) {
-        fmt::print(stderr, "CUDA not available, falling back to CPU: {}\n", e.what());
-    }
+#error "No execution provider selected: define one of ORT_EP_GPU, ORT_EP_OPENVINO or ORT_EP_CPU."
 #endif
 
     // Dynamic Context Switching based on Execution Provider
@@ -73,8 +83,8 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         sessionOptions.SetIntraOpNumThreads(1);
     }
     else {
-        // CPU Fallback Mode: Maximize x64 architecture utilization
-        fmt::print(stderr, "WARNING: Initializing CPU Fallback with aggressive optimizations.\n");
+        // CPU Execution Provider: Maximize x64 architecture utilization
+        fmt::print(stderr, "WARNING: Initializing CPU Execution Provider with aggressive optimizations.\n");
 
         // Enable memory arena to avoid continuous OS memory allocations
         sessionOptions.EnableCpuMemArena();
@@ -142,11 +152,11 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
             memoryInfo, dummyInput.data(), dummyInput.size(), inputShape.data(), inputShape.size());
 
         // Execute Warmup Runs
-        // The first run triggers engine building (TensorRT/OpenVINO compilation) and
+        // The first run triggers engine building (TensorRT compilation) and
         // memory allocation; the following ones stabilize the execution path so the
         // first REAL frame does not hit a cold engine. This happens at Configure
         // time, before the camera trigger starts.
-        constexpr int kWarmupRuns = 3;
+        constexpr int kWarmupRuns = 50;
         double firstMs = 0.0;
         double lastMs = 0.0;
         for (int r = 0; r < kWarmupRuns; ++r) {
@@ -183,7 +193,7 @@ void AnomalyEngine::LoadNormalizationMetadata()
             }
         }
         return false;
-    };
+        };
 
     const bool hasMin = lookupFloat({ "calibration_global_min", "min" }, globalMin);
     const bool hasMax = lookupFloat({ "calibration_global_max", "max" }, globalMax);
@@ -231,12 +241,12 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
 
     cv::Mat resizeImage;
     cv::resize(
-        rawImg, 
+        rawImg,
         resizeImage,
-        cv::Size(static_cast<int>(modelWidth), 
+        cv::Size(static_cast<int>(modelWidth),
             static_cast<int>(modelHeight)),
-        0, 
-        0, 
+        0,
+        0,
         cv::INTER_LINEAR
     );
 
