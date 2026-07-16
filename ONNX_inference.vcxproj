@@ -228,6 +228,7 @@ xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Comman
     <ClCompile Include="ClassificationEngine.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ManagerONNX.cpp" />
+    <ClCompile Include="OrtsessionConfig.cpp" />
     <ClCompile Include="WorkerONNX.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -236,6 +237,7 @@ xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Comman
     <ClInclude Include="IEngine.h" />
     <ClInclude Include="IPC_Shared.h" />
     <ClInclude Include="ManagerONNX.h" />
+    <ClInclude Include="OrtsessionConfig.h" />
     <ClInclude Include="WorkerONNX.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

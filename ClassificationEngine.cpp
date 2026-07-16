@@ -8,6 +8,7 @@
 #include <thread>
 #include <unordered_map>
 #include <algorithm>
+#include "OrtsessionConfig.h"
 
 ClassificationEngine::ClassificationEngine()
 {
@@ -19,80 +20,13 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
 {
     Ort::SessionOptions sessionOptions;
 
-    bool hardwareAccelerated = false;
-
-#if defined(ORT_EP_GPU)
-    // Setup hardware acceleration (GPU build: TensorRT -> CUDA -> CPU)
-    try {
-        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        OrtTensorRTProviderOptions trt_options{};
-        trt_options.device_id = 0;
-        trt_options.trt_fp16_enable = 1;
-        trt_options.trt_engine_cache_enable = 1;
-        trt_options.trt_engine_cache_path = "./trt_cache";
-        sessionOptions.AppendExecutionProvider_TensorRT(trt_options);
-        hardwareAccelerated = true;
-        fmt::print("TensorRT Execution Provider appended successfully for Classification.\n");
-    }
-    catch (const Ort::Exception& e) {
-        fmt::print(stderr, "TensorRT not available, falling back to CUDA: {}\n", e.what());
-    }
-
-#elif defined(ORT_EP_OPENVINO)
-    // Setup hardware acceleration (OpenVINO build: Intel GPU -> CPU via device AUTO)
-    try {
-        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
-        unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
-
-        std::unordered_map<std::string, std::string> ov_options;
-        ov_options["device_type"] = "CPU";
-        ov_options["precision"] = "FP32";
-        ov_options["num_streams"] = "1";
-        ov_options["num_of_threads"] = std::to_string(physicalCores);
-
-        sessionOptions.AppendExecutionProvider_OpenVINO_V2(ov_options);
-        hardwareAccelerated = true;
-        fmt::print("OpenVINO Execution Provider appended successfully for Classification.\n");
-    }
-    catch (const Ort::Exception& e) {
-        sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL); 
-        unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
-        sessionOptions.SetIntraOpNumThreads(physicalCores);
-        fmt::print(stderr, "OpenVINO not available, falling back to default CPU: {}\n", e.what());
-    }
-
-#elif defined(ORT_EP_CPU)
-    // CPU build: no execution provider is appended, the built-in ONNX Runtime
-    // CPU EP is used. hardwareAccelerated stays false so the CPU-side
-    // optimizations below are applied.
-    fmt::print("CPU build: using the default ONNX Runtime CPU Execution Provider for Classification.\n");
-
-#else
-#error "No execution provider selected: define one of ORT_EP_GPU, ORT_EP_OPENVINO or ORT_EP_CPU."
-#endif
-
-    // Dynamic context switching based on the execution provider (same policy as AnomalyEngine)
-    if (hardwareAccelerated) {
-        // GPU/OpenVINO manage their own threading: one ORT thread avoids context switching
-        sessionOptions.SetIntraOpNumThreads(1);
-    }
-    else {
-        // CPU EP: the previous hardcoded SetIntraOpNumThreads(1) forced the whole
-        // network onto a single core. Use the physical cores instead.
-        fmt::print(stderr, "WARNING: Initializing CPU Execution Provider with aggressive optimizations.\n");
-
-        sessionOptions.EnableCpuMemArena();
-        sessionOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-
-        // Flush-To-Zero / Denormals-Are-Zero: prevents catastrophic slowdowns on near-zero floats
-        _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-        _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
-    }
+    // Execution providers + session options: identical policy across all engines.
+    ConfigureOrtSessionOptions(sessionOptions, "Classification");
 
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
 
     // Extract I/O names dynamically from the model graph and store them for Infer
-    // (same pattern as AnomalyEngine: no hardcoded names)
+    // (no hardcoded names)
     Ort::AllocatorWithDefaultOptions allocator;
     inputName = session->GetInputNameAllocated(0, allocator).get();
 
@@ -131,9 +65,9 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     const char* warmupOutputNames[] = { outputNames[0].c_str() };
 
     // Multiple warmup runs: the first one pays graph compilation and lazy
-    // allocations, the following ones stabilize the execution path. This runs
-    // at Configure time, BEFORE the camera trigger starts, so the first real
-    // frame does not hit a cold engine (the camera cannot be delayed in production)
+    // allocations, the following ones stabilize the execution path. This runs at
+    // Configure time, BEFORE the camera trigger starts, so the first real frame
+    // does not hit a cold engine (the camera cannot be delayed in production).
     constexpr int kWarmupRuns = 50;
     double firstMs = 0.0;
     double lastMs = 0.0;
@@ -147,7 +81,6 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     fmt::print("Classification Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms.\n",
         kWarmupRuns, firstMs, lastMs);
 }
-
 void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
     void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
 {

@@ -38,7 +38,7 @@ private:
 
 
     double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
-    double maxRun = 0; 
+    double maxRun = 0;
     int frameCount = 0;
 
     std::vector<cv::Mat> m_splitPlanes;
