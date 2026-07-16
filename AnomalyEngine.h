@@ -19,8 +19,9 @@ public:
 	/**
 	 * @brief Loads the ONNX model, extracts input/output metadata, and initializes the session.
 	 * @param modelPath Path to the .onnx model file.
+	 * @param cpuPartition Core slice owned by this session (sizes/pins the intra-op pool).
 	 */
-	void Initialize(const std::wstring& modelPath) override;
+	void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
 
 	/**
 	 * @brief Performs inference on a provided raw image buffer.
@@ -59,6 +60,10 @@ private:
 	std::vector<float> inputTensorValues;
 	std::vector<cv::Mat> m_splitPlanes;
 	cv::Mat m_resizeImage;
+
+	// Ort::Value wrapping inputTensorValues, created ONCE at Initialize and
+	// reused by every Run (zero-copy policy: the buffer is refilled in place)
+	Ort::Value m_inputTensor{ nullptr };
 
 	// Cache indices for score and map nodes after initial graph inspection
 	int scoreIdx = -1;

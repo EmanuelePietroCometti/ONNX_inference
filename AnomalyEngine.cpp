@@ -1,5 +1,5 @@
 #include "AnomalyEngine.h"
-#include <fmt/core.h>
+#include "AsyncLogger.h"
 #include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
 #include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
 #include <algorithm>
@@ -17,16 +17,17 @@ AnomalyEngine::AnomalyEngine()
     memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 }
 
-void AnomalyEngine::Initialize(const std::wstring& modelPath)
+void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition)
 {
     Ort::SessionOptions sessionOptions;
 
-    // Execution providers + session options: identical policy across all engines.
-    ConfigureOrtSessionOptions(sessionOptions, "Anomaly");
+    // Execution providers + session options: identical policy across all
+    // engines. The CPU partition sizes and pins this session's intra-op pool.
+    ConfigureOrtSessionOptions(sessionOptions, "Anomaly", cpuPartition);
 
     // Create the session
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
-    fmt::print("ONNX Session created successfully for Anomaly Detection.\n");
+    Log::Info("ONNX Session created successfully for Anomaly Detection.");
 
     // Read global_min / global_max / threshold from the ONNX metadata and
     // pre-compute the normalized threshold used at inference time
@@ -73,8 +74,9 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         inputTensorValues.assign(totalElements, 0.0f);
         m_splitPlanes.resize(modelChannels);
 
-        // Create the input tensor wrapper using the pre-allocated buffer
-        Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+        // Create the input tensor wrapper ONCE using the pre-allocated buffer;
+        // Infer refills the buffer in place and reuses this same Ort::Value
+        m_inputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo,
             inputTensorValues.data(),
             inputTensorValues.size(),
@@ -96,16 +98,16 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath)
         double lastMs = 0.0;
         for (int r = 0; r < kWarmupRuns; ++r) {
             auto startTime = std::chrono::steady_clock::now();
-            session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, warmupOutputNames, 1);
+            session->Run(Ort::RunOptions{ nullptr }, inputNames, &m_inputTensor, 1, warmupOutputNames, 1);
             lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
             if (r == 0) firstMs = lastMs;
         }
 
-        fmt::print("Warmup completed successfully: {} runs, first {:.1f} ms, last {:.1f} ms. Engine is locked and ready for real-time inference.\n",
+        Log::Info("Warmup completed successfully: {} runs, first {:.1f} ms, last {:.1f} ms. Engine is locked and ready for real-time inference.",
             kWarmupRuns, firstMs, lastMs);
     }
     catch (const Ort::Exception& e) {
-        fmt::print(stderr, "### ERROR DURING WARMUP: {}\n", e.what());
+        Log::Error("### ERROR DURING WARMUP: {}", e.what());
         throw; // Escalate the error, as an un-warmed engine cannot guarantee production timings
     }
 }
@@ -122,7 +124,7 @@ void AnomalyEngine::LoadNormalizationMetadata()
             auto value = metadata.LookupCustomMetadataMapAllocated(key, allocator);
             if (value) {
                 target = std::stof(value.get());
-                fmt::print("Metadata '{}' = {}\n", key, target);
+                Log::Info("Metadata '{}' = {}", key, target);
                 return true;
             }
         }
@@ -134,9 +136,9 @@ void AnomalyEngine::LoadNormalizationMetadata()
     const bool hasThreshold = lookupFloat({ "calibrated_threshold", "threshold", "global_threshold" }, rawThreshold);
 
     if (!hasMin || !hasMax || !hasThreshold) {
-        fmt::print(stderr,
+        Log::Warning(
             "### WARNING: normalization metadata incomplete (min:{} max:{} threshold:{}). "
-            "Falling back to defaults, scores will NOT match the Python model.\n",
+            "Falling back to defaults, scores will NOT match the Python model.",
             hasMin, hasMax, hasThreshold);
     }
 
@@ -151,7 +153,7 @@ void AnomalyEngine::LoadNormalizationMetadata()
     // score against the raw threshold, so the OK/REJECT decision is identical
     normalizedThreshold = (rawThreshold - globalMin) / range;
 
-    fmt::print("Normalization ready: globalMin={}, globalMax={}, rawThreshold={}, normalizedThreshold={}\n",
+    Log::Info("Normalization ready: globalMin={}, globalMax={}, rawThreshold={}, normalizedThreshold={}",
         globalMin, globalMax, rawThreshold, normalizedThreshold);
 }
 
@@ -185,15 +187,11 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
-    // Create ONNX Runtime tensor from pre-allocated buffer
-    Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-        memoryInfo, inputTensorValues.data(), inputTensorValues.size(),
-        inputShape.data(), inputShape.size());
-
-    // Execute inference
+    // Zero-copy: m_inputTensor already wraps inputTensorValues, which the
+    // normalization above refilled in place. Nothing to create per frame.
     const char* inputNamesC[] = { inputName.c_str() };
     auto outputTensors = session->Run(Ort::RunOptions{ nullptr },
-        inputNamesC, &inputTensor, 1, outputNamesC.data(), outputNamesC.size());
+        inputNamesC, &m_inputTensor, 1, outputNamesC.data(), outputNamesC.size());
 
     // Identify output indices for score and heatmap upon first execution
     if (scoreIdx < 0) {

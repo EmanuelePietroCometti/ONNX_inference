@@ -1,14 +1,12 @@
 #include "ManagerONNX.h"
-#include <iostream>
+#include "AsyncLogger.h"
 #include <stdexcept>
-#include <fmt/core.h>
-#include <fmt/color.h>
 
 ManagerONNX::ManagerONNX() : hMapFile(NULL), pSharedList(NULL), hGlobalMutex(NULL), hEventTrigger(NULL), hEventAck(NULL)
 {
 	if (!InitializeIPC())
 	{
-		fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "### ERROR: Global IPC initialization failed!\n");
+		Log::Error("### ERROR: Global IPC initialization failed!");
 		throw std::runtime_error("### ERROR: Global IPC initialization failed!");
 	}
 }
@@ -24,7 +22,7 @@ ManagerONNX::~ManagerONNX()
 
 void ManagerONNX::Run()
 {
-	fmt::print("ONNX manager started. Waiting for signals...\n");
+	Log::Info("ONNX manager started. Waiting for signals...");
 
 	bool isRunning = true;
 	while (isRunning)
@@ -49,7 +47,7 @@ void ManagerONNX::Run()
 			HandleConfiguration();
 		}
 	}
-	fmt::print("ONNX manager correctly terminated.\n");
+	Log::Info("ONNX manager correctly terminated.");
 }
 
 bool ManagerONNX::InitializeIPC()
@@ -64,7 +62,7 @@ bool ManagerONNX::InitializeIPC()
 
 	if (hMapFile == NULL)
 	{
-		fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "### ERROR: CreateFileMapping failed with code: {}\n", GetLastError());
+		Log::Error("### ERROR: CreateFileMapping failed with code: {}", GetLastError());
 		return false;
 	}
 
@@ -75,7 +73,7 @@ bool ManagerONNX::InitializeIPC()
 		DWORD dwErr = GetLastError();
 		CloseHandle(hMapFile);
 		hMapFile = NULL;
-		fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "### ERROR: MapViewOfFile failed with code: {}\n", dwErr);
+		Log::Error("### ERROR: MapViewOfFile failed with code: {}", dwErr);
 		return false;
 	}
 
@@ -84,7 +82,7 @@ bool ManagerONNX::InitializeIPC()
 
 void ManagerONNX::HandleConfiguration()
 {
-	fmt::print(">> Configuration request received (UPDATE_PENDING)!\n");
+	Log::Info(">> Configuration request received (UPDATE_PENDING)!");
 
 	activeWorkers.clear();
 	bool configSuccess = true;
@@ -95,8 +93,11 @@ void ManagerONNX::HandleConfiguration()
 		for (i = 0; i < pSharedList->numPunti; i++) {
 			DWORD idPunto = pSharedList->points[i].idPunto;
 
-			// Start a new worker for this point 
-			activeWorkers[idPunto] = std::make_unique<WorkerONNX>(&pSharedList->points[i]);
+			// Start a new worker for this point. Creation index + total count
+			// determine the slice of physical cores owned by this worker's
+			// session, so concurrent sessions never compete for a core
+			activeWorkers[idPunto] = std::make_unique<WorkerONNX>(
+				&pSharedList->points[i], i, pSharedList->numPunti);
 			activeWorkers[idPunto]->Start();
 
 			// Set the state to CONFIGURED after the thread creation
@@ -105,7 +106,7 @@ void ManagerONNX::HandleConfiguration()
 	}
 	catch (const std::exception& e) {
 		DWORD idPunto = pSharedList->points[i].idPunto;
-		fmt::print(stderr, "### ERROR DURING CONFIGURATION: {}\n", e.what());
+		Log::Error("### ERROR DURING CONFIGURATION: {}", e.what());
 
 		// If the WorkerONNX constructor threw, operator[] already inserted a NULL
 		// unique_ptr for this id: calling MarkAsError() through it would dereference
@@ -118,7 +119,7 @@ void ManagerONNX::HandleConfiguration()
 		}
 		else {
 			pSharedList->points[i].status = PointState::ERROR_DETECTED;
-			fmt::print("Worker {} ERROR_DETECTED (construction failed)\n", idPunto);
+			Log::Error("Worker {} ERROR_DETECTED (construction failed)", idPunto);
 			activeWorkers.erase(idPunto);
 		}
 		configSuccess = false;
@@ -133,17 +134,17 @@ void ManagerONNX::HandleConfiguration()
 	// Notify the external program that all threads started and configured correctly
 	SetEvent(hEventAck);
 
-	fmt::print(">> Configuration completed. Ack sent!\n");
+	Log::Info(">> Configuration completed. Ack sent!");
 }
 
 void ManagerONNX::HandleTermination()
 {
-	fmt::print(">> Shutdown request received (QUIT)!\n");
+	Log::Info(">> Shutdown request received (QUIT)!");
 
 	// Iterate on each worker and call the Stop method
 	activeWorkers.clear();
 
-	// Send ack event 
+	// Send ack event
 	SetEvent(hEventAck);
-	fmt::print(">> Shutdown completed. Ack sent!\n");
+	Log::Info(">> Shutdown completed. Ack sent!");
 }

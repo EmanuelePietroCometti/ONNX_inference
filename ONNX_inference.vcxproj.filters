@@ -33,6 +33,12 @@
     <ClCompile Include="OrtsessionConfig.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
+    <ClCompile Include="AsyncLogger.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="RealTimeConfig.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="IPC_Shared.h">
@@ -54,6 +60,12 @@
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="OrtsessionConfig.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="AsyncLogger.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="RealTimeConfig.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,18 +1,18 @@
 #include "WorkerONNX.h"
 #include "ClassificationEngine.h"
-#include <iostream>
+#include "AsyncLogger.h"
+#include "RealTimeConfig.h"
 #include <chrono>
 #include <fmt/core.h>
 #include <fmt/xchar.h>
 #include <string>
 #include <vector>
 #include <cstdint>
-#include <nlohmann/json.hpp>
 
-using json = nlohmann::json;
-
-WorkerONNX::WorkerONNX(PTcontrolPoint pPoint) :
+WorkerONNX::WorkerONNX(PTcontrolPoint pPoint, unsigned workerIndex, unsigned workerCount) :
 	controlPointData(pPoint),
+	workerIndex(workerIndex),
+	cpuPartition(RT::ComputeCpuPartition(workerIndex, workerCount)),
 	hLocalMutex(NULL),
 	hEventReady(NULL), 
 	hEventResults(NULL), 
@@ -46,7 +46,7 @@ void WorkerONNX::Stop()
 	DWORD waitRes = WaitForSingleObject(hLocalMutex, INFINITE);
 	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
-		fmt::print(">> Worker {} shutdown pending...\n", controlPointData->idPunto);
+		Log::Info(">> Worker {} shutdown pending...", controlPointData->idPunto);
 		controlPointData->status = PointState::QUIT;
 		ReleaseMutex(hLocalMutex);
 	}
@@ -58,7 +58,7 @@ void WorkerONNX::Stop()
 	if (workerThread.joinable()) {
 		workerThread.join();
 	}
-	fmt::print(">> Worker {} stopped!\n", controlPointData->idPunto);
+	Log::Info(">> Worker {} stopped!", controlPointData->idPunto);
 }
 
 void WorkerONNX::MarkAsConfigured()
@@ -67,7 +67,7 @@ void WorkerONNX::MarkAsConfigured()
 	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
 		controlPointData->status = PointState::CONFIGURED;
-		fmt::print("Worker {} CONFIGURED\n", controlPointData->idPunto);
+		Log::Info("Worker {} CONFIGURED", controlPointData->idPunto);
 		ReleaseMutex(hLocalMutex);
 	}
 }
@@ -78,19 +78,25 @@ void WorkerONNX::MarkAsError()
 	if (waitRes == WAIT_OBJECT_0 || waitRes == WAIT_ABANDONED)
 	{
 		controlPointData->status = PointState::ERROR_DETECTED;
-		fmt::print("Worker {} ERROR_DETECTED\n", controlPointData->idPunto);
+		Log::Error("Worker {} ERROR_DETECTED", controlPointData->idPunto);
 		ReleaseMutex(hLocalMutex);
 	}
 }
 
 void WorkerONNX::InferenceLoop()
 {
-	// Boost thread priority to minimize wake-up latency from WaitForSingleObject
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	// TIME_CRITICAL priority + first core of this worker's slice: the worker
+	// must preempt everything else the instant hEventReady fires, and its ORT
+	// pool threads own the remaining slice cores (see RealTimeConfig.h)
+	RT::ConfigureInferenceThread(workerIndex, cpuPartition);
 
-	fmt::print(">> Worker thread started for control point: {}\n", controlPointData->idPunto);
+	Log::Info(">> Worker thread started for control point: {}", controlPointData->idPunto);
 	bool shouldQuit = false;
 	uint32_t frameCounter = 0; // Local counter for throttling logs
+
+	// Reused across frames: statusStr keeps its heap capacity after the first
+	// frame, so the steady-state loop performs no allocations at all
+	std::string statusStr;
 
 	while (!shouldQuit) {
 		bool inferenceError = false;
@@ -109,7 +115,7 @@ void WorkerONNX::InferenceLoop()
 			if (shouldQuit) break;
 
 			float anomalyScore = 0.0f;
-			std::string statusStr = "ERROR";
+			statusStr.assign("ERROR");
 
 			// Measure the end-to-end inference latency
 			const auto inferStart = std::chrono::steady_clock::now();
@@ -128,17 +134,43 @@ void WorkerONNX::InferenceLoop()
 						anomalyScore,
 						statusStr);
 				}
+				else {
+					// Engine or shared buffers missing: the frame cannot be
+					// processed, report it as an error instead of publishing
+					// a stale/invalid result
+					inferenceError = true;
+				}
 			}
 			catch (const std::exception& e) {
-				fmt::print(stderr, "### AI INFERENCE EXCEPTION ON CP {}: {}\n", controlPointData->idPunto, e.what());
+				Log::Error("### AI INFERENCE EXCEPTION ON CP {}: {}", controlPointData->idPunto, e.what());
 				inferenceError = true;
 			}
 
 			const double inferMs = std::chrono::duration<double, std::milli>(
 				std::chrono::steady_clock::now() - inferStart).count();
 
-			// Variables for logging outside the mutex
-			std::string serializedJson;
+			// The result JSON has a fixed schema: build it with fmt straight
+			// onto the stack. No nlohmann DOM, no heap allocation, no wstring
+			// temporary — the hot path only formats and copies
+			char jsonBuf[512];
+			size_t jsonLen = 0;
+
+			if (controlPointData->inferenceType == InferenceType::ANOMALY) {
+				const auto out = fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
+					R"({{"anomaly_score":{:.6f},"status":"{}"}})", anomalyScore, statusStr);
+				jsonLen = out.size;
+			}
+			else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
+				// statusStr carries the class id as text; on error publish -1
+				const auto out = inferenceError
+					? fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
+						R"({{"class_id":-1,"confidence":0.0}})")
+					: fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
+						R"({{"class_id":{},"confidence":{:.6f}}})", statusStr, anomalyScore);
+				jsonLen = out.size;
+			}
+			jsonLen = (jsonLen < sizeof(jsonBuf)) ? jsonLen : sizeof(jsonBuf) - 1;
+			jsonBuf[jsonLen] = '\0';
 
 			// SYNCHRONIZE STATE AND JSON
 			DWORD resWait = WaitForSingleObject(hLocalMutex, INFINITE);
@@ -150,44 +182,33 @@ void WorkerONNX::InferenceLoop()
 					controlPointData->results.state = InferenceState::ERROR_DETECTED;
 				}
 
-				json responseJson;
-
-				if (controlPointData->inferenceType == InferenceType::ANOMALY) {
-					responseJson["anomaly_score"] = anomalyScore;
-					responseJson["status"] = statusStr;
+				// The JSON is pure ASCII: widen it char-by-char directly into
+				// the shared buffer, without any intermediate std::wstring
+				constexpr size_t kJsonCapacity = sizeof(controlPointData->results.json) / sizeof(TCHAR);
+				const size_t copyLen = (jsonLen < kJsonCapacity - 1) ? jsonLen : kJsonCapacity - 1;
+				for (size_t k = 0; k < copyLen; ++k) {
+					controlPointData->results.json[k] = static_cast<TCHAR>(static_cast<unsigned char>(jsonBuf[k]));
 				}
-				else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
-					if (!inferenceError) {
-						responseJson["class_id"] = stoi(statusStr);
-						responseJson["confidence"] = anomalyScore;
-					}
-					else {
-						responseJson["class_id"] = -1;
-						responseJson["confidence"] = 0.0f;
-					}
-				}
+				controlPointData->results.json[copyLen] = 0;
 
-				serializedJson = responseJson.dump();
-
-				// Fast ASCII conversion
-				std::wstring wJsonPayload(serializedJson.begin(), serializedJson.end());
-				wcscpy_s(controlPointData->results.json, 1024, wJsonPayload.c_str());
-
-				// Release Mutex BEFORE doing any console I/O
+				// Release Mutex BEFORE signaling, so the producer never wakes
+				// up just to block on the mutex we still hold
 				ReleaseMutex(hLocalMutex);
 
 				// Signal the producer immediately that data is ready
 				SetEvent(hEventResults);
 			}
 
-			// Log only once every 100 frames to keep the hot path clean
+			// Throttled telemetry: even this enqueue is allocation-free, the
+			// AsyncLogger consumer does the console I/O on core 0
 			frameCounter++;
 			if (frameCounter % 100 == 0) {
-				fmt::print("Worker {} | infer {:.1f} ms | {}\n", controlPointData->idPunto, inferMs, serializedJson);
+				Log::Info("Worker {} | infer {:.1f} ms | {}", controlPointData->idPunto,
+					inferMs, fmt::string_view(jsonBuf, jsonLen));
 			}
 		}
 	}
-	fmt::print(">> Worker thread stopped for control point: {}\n", controlPointData->idPunto);
+	Log::Info(">> Worker thread stopped for control point: {}", controlPointData->idPunto);
 }
 
 void WorkerONNX::InitializeLocalPC()
@@ -211,7 +232,7 @@ void WorkerONNX::InitializeLocalPC()
 		DWORD dwErr = GetLastError();
 		CloseHandle(hMMFImage);
 		hMMFImage = NULL;
-		fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "### ERROR: MapViewOfFile failed with code: {}\n", dwErr);
+		Log::Error("### ERROR: MapViewOfFile failed with code: {}", dwErr);
 		throw std::runtime_error("MapViewOfFile failed!");
 	}
 
@@ -228,7 +249,7 @@ void WorkerONNX::InitializeLocalPC()
 		DWORD dwErr = GetLastError();
 		CloseHandle(hMMFResImage);
 		hMMFResImage = NULL;
-		fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "### ERROR: MapViewOfFile failed with code: {}\n", dwErr);
+		Log::Error("### ERROR: MapViewOfFile failed with code: {}", dwErr);
 		throw std::runtime_error("MapViewOfFile failed!");
 	}
 
@@ -236,17 +257,17 @@ void WorkerONNX::InitializeLocalPC()
 
 	switch (controlPointData->inferenceType) {
 	case InferenceType::ANOMALY:
-		fmt::print("Initialize ONNX engine for ANOMALY!\n");
+		Log::Info("Initialize ONNX engine for ANOMALY!");
 		aiEngine = std::make_unique<AnomalyEngine>();
-		aiEngine->Initialize(controlPointData->pathModello);
+		aiEngine->Initialize(controlPointData->pathModello, cpuPartition);
 		break;
 	case InferenceType::CLASSIFICATION:
-		fmt::print("Initialize ONNX engine for CLASSIFICATION!\n");
+		Log::Info("Initialize ONNX engine for CLASSIFICATION!");
 		aiEngine = std::make_unique<ClassificationEngine>();
-		aiEngine->Initialize(controlPointData->pathModello);
+		aiEngine->Initialize(controlPointData->pathModello, cpuPartition);
 		break;
 	case InferenceType::OBJECT_DETECTION:
-		fmt::print("Initialize ONNX engine for OBJECT DETECTION!\n");
+		Log::Info("Initialize ONNX engine for OBJECT DETECTION!");
 		// engine = std::make_unique<ObjectDetectionEngine>();
 		break;
 	default:

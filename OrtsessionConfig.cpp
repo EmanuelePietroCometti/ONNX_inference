@@ -1,10 +1,11 @@
 #include "OrtsessionConfig.h"
+#include "AsyncLogger.h"
 #include <onnxruntime_session_options_config_keys.h>
-#include <fmt/core.h>
+#include <windows.h>
+#include <process.h>
 #include <algorithm>
 #include <filesystem>
 #include <memory>
-#include <thread>
 #include <unordered_map>
 
 //
@@ -21,13 +22,74 @@
 //
 
 
+namespace {
+
+// Custom thread factory for the ORT intra-op pool.
+//
+// CRITICAL for the real-time budget: on the CPU EP the convolutions run on the
+// intra-op pool threads, NOT on the worker thread that calls Run(). Boosting
+// only the worker with SetThreadPriority would leave the threads doing the
+// actual compute at NORMAL priority, where any background process can preempt
+// them mid-frame. This factory creates the pool threads through
+// _beginthreadex and raises each one to TIME_CRITICAL before it starts
+// serving kernels.
+struct OrtThreadCtx {
+    OrtThreadWorkerFn fn;
+    void* param;
+};
+
+unsigned __stdcall OrtRtThreadEntry(void* arg)
+{
+    std::unique_ptr<OrtThreadCtx> ctx(static_cast<OrtThreadCtx*>(arg));
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    ctx->fn(ctx->param);
+    return 0;
+}
+
+OrtCustomThreadHandle OrtRtCreateThread(void* /*options*/, OrtThreadWorkerFn fn, void* param)
+{
+    auto* ctx = new OrtThreadCtx{ fn, param };
+    const uintptr_t handle = _beginthreadex(nullptr, 0, &OrtRtThreadEntry, ctx, 0, nullptr);
+    if (handle == 0) {
+        delete ctx;
+        return nullptr;
+    }
+    return reinterpret_cast<OrtCustomThreadHandle>(handle);
+}
+
+void OrtRtJoinThread(OrtCustomThreadHandle handle)
+{
+    HANDLE h = (HANDLE)handle;
+    WaitForSingleObject(h, INFINITE);
+    CloseHandle(h);
+}
+
+} // namespace
+
 // Configures execution providers + session options for one session.
 // Returns true if a hardware-accelerated EP (TensorRT / CUDA / OpenVINO) was
 // appended, false if the run will happen on the built-in CPU EP.
 // 'tag' is only used to prefix log lines (e.g. "Anomaly", "Classification").
-bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
+// 'cpuPartition' is the core slice owned by this session; empty = whole machine.
+bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
+    const RT::CpuPartition& cpuPartition)
 {
     bool hardwareAccelerated = false;
+
+    // Threads available to THIS session: its core slice when partitioned,
+    // otherwise all usable physical cores minus the reserved one. The real
+    // topology comes from RT (GetLogicalProcessorInformationEx intersected
+    // with the process affinity mask): hardware_concurrency()/2 would be
+    // WRONG on the production target, where hyper-threading is disabled and
+    // that heuristic halves the real core count.
+    unsigned sliceThreads;
+    if (cpuPartition.logicalProcessors.empty()) {
+        const unsigned computeCores = RT::PhysicalCoreCount();
+        sliceThreads = computeCores > 1 ? computeCores - 1 : 1;
+    }
+    else {
+        sliceThreads = static_cast<unsigned>(cpuPartition.logicalProcessors.size());
+    }
 
 #if defined(ORT_EP_GPU)
     // GPU build: TensorRT -> CUDA -> CPU
@@ -71,10 +133,10 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
 
         so.AppendExecutionProvider_TensorRT_V2(*trt);
         hardwareAccelerated = true;
-        fmt::print("[{}] TensorRT EP appended (FP16 + engine/timing cache).\n", tag);
+        Log::Info("[{}] TensorRT EP appended (FP16 + engine/timing cache).", tag);
     }
     catch (const Ort::Exception& e) {
-        fmt::print(stderr, "[{}] TensorRT unavailable, trying CUDA: {}\n", tag, e.what());
+        Log::Warning("[{}] TensorRT unavailable, trying CUDA: {}", tag, e.what());
     }
 
     // CUDA fallback (also covers subgraphs TensorRT cannot handle)
@@ -93,10 +155,10 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
 
         so.AppendExecutionProvider_CUDA_V2(*cuda);
         hardwareAccelerated = true;
-        fmt::print("[{}] CUDA EP appended.\n", tag);
+        Log::Info("[{}] CUDA EP appended.", tag);
     }
     catch (const Ort::Exception& e) {
-        fmt::print(stderr, "[{}] CUDA unavailable, falling back to CPU: {}\n", tag, e.what());
+        Log::Warning("[{}] CUDA unavailable, falling back to CPU: {}", tag, e.what());
     }
 
 #elif defined(ORT_EP_OPENVINO)
@@ -105,30 +167,32 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
     // (or interfere), so disable them and let OpenVINO own the optimization.
     so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
 
-    const unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
     try {
         std::unordered_map<std::string, std::string> ov;
         ov["device_type"] = "CPU";   // "GPU,CPU" or "AUTO:GPU,CPU" to prefer an Intel GPU
         ov["precision"] = "FP32";  // "FP16" if the device supports it and accuracy holds
         ov["num_streams"] = "1";     // single stream: minimize single-frame latency
-        ov["num_of_threads"] = std::to_string(physicalCores);
+        // Size the OpenVINO pool on this session's core slice, not the whole
+        // machine: with concurrent control points every session spawning a
+        // full-machine pool would oversubscribe all cores
+        ov["num_of_threads"] = std::to_string(sliceThreads);
 
         so.AppendExecutionProvider_OpenVINO_V2(ov);
         hardwareAccelerated = true;
-        fmt::print("[{}] OpenVINO EP appended (CPU, FP32, 1 stream, {} threads).\n", tag, physicalCores);
+        Log::Info("[{}] OpenVINO EP appended (CPU, FP32, 1 stream, {} threads).", tag, sliceThreads);
     }
     catch (const Ort::Exception& e) {
         // Fallback runs on the built-in CPU EP: re-enable ORT fusions, which are
         // exactly what we want on CPU. hardwareAccelerated stays false so the
         // unified CPU tuning block below applies threads/arena/denormals.
         so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        fmt::print(stderr, "[{}] OpenVINO unavailable, falling back to CPU: {}\n", tag, e.what());
+        Log::Warning("[{}] OpenVINO unavailable, falling back to CPU: {}", tag, e.what());
     }
 
 #elif defined(ORT_EP_CPU)
     // CPU build: built-in ORT CPU EP
     so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    fmt::print("[{}] CPU build: using the default ONNX Runtime CPU EP.\n", tag);
+    Log::Info("[{}] CPU build: using the default ONNX Runtime CPU EP.", tag);
 
 #else
 #error "No execution provider selected: define one of ORT_EP_GPU, ORT_EP_OPENVINO or ORT_EP_CPU."
@@ -142,11 +206,9 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
     }
     else {
         // CPU path: the ORT intra-op pool actually runs the convolutions.
-        const unsigned int physicalCores = std::max(1u, std::thread::hardware_concurrency() / 2);
-
         so.EnableCpuMemArena();                                     // avoid per-run OS allocations
         so.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);         // no inter-op locking overhead
-        so.SetIntraOpNumThreads(static_cast<int>(physicalCores));   // physical cores, not logical
+        so.SetIntraOpNumThreads(static_cast<int>(sliceThreads));    // this session's core slice
 
         // Flush denormals to zero ON THE ORT WORKER THREADS. Setting MXCSR by hand
         // (_MM_SET_FLUSH_ZERO_MODE / _MM_SET_DENORMALS_ZERO_MODE) only affects the
@@ -155,11 +217,35 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag)
         // every intra-op thread, which is what actually matters for CNNs.
         so.AddConfigEntry(kOrtSessionOptionsConfigSetDenormalAsZero, "1");
 
-        // Optional real-time tuning: by default ORT busy-waits (spins) between ops
-        // to shave latency. If this worker shares cores with the high-priority
-        // frame producer, that spinning can add jitter. Uncomment to trade a bit
-        // of latency for lower CPU contention (measure before keeping it):
-        so.AddConfigEntry(kOrtSessionOptionsConfigAllowIntraOpSpinning, "0");
+        // Pin the pool threads inside this session's core slice. ORT expects
+        // intra_op_num_threads - 1 affinity entries: the calling thread (our
+        // worker, pinned by RT::ConfigureInferenceThread to slice core 0) is
+        // the pool's implicit first member. ORT processor ids are 1-BASED.
+        if (cpuPartition.logicalProcessors.size() > 1) {
+            std::string affinity;
+            for (size_t t = 1; t < cpuPartition.logicalProcessors.size(); ++t) {
+                if (!affinity.empty()) affinity += ';';
+                affinity += std::to_string(cpuPartition.logicalProcessors[t] + 1);
+            }
+            so.AddConfigEntry(kOrtSessionOptionsConfigIntraOpThreadAffinities, affinity.c_str());
+            Log::Info("[{}] Intra-op pool pinned inside the slice (1-based ids: '{}')", tag, affinity);
+        }
+
+        // Spinning policy: on a DEDICATED slice, busy-waiting between ops burns
+        // only cores this session owns and removes wake-up latency (tens of us
+        // per parallel section) -> keep it on. Without a partition, or when
+        // slices overlap, spinning fights the other sessions -> turn it off.
+        const bool dedicatedSlice = !cpuPartition.logicalProcessors.empty() && !cpuPartition.shared;
+        so.AddConfigEntry(kOrtSessionOptionsConfigAllowIntraOpSpinning, dedicatedSlice ? "1" : "0");
+
+        // Real-time intra-op pool: the conv kernels run on these threads, not
+        // on the caller of Run(). Create them via the custom factory above so
+        // each pool thread starts at TIME_CRITICAL priority and cannot be
+        // preempted mid-frame by normal-priority background work.
+        so.SetCustomCreateThreadFn(OrtRtCreateThread);
+        so.SetCustomJoinThreadFn(OrtRtJoinThread);
+        Log::Info("[{}] Intra-op pool: {} TIME_CRITICAL threads, spinning {}.",
+            tag, sliceThreads, dedicatedSlice ? "ON" : "OFF");
     }
 
     return hardwareAccelerated;

@@ -10,7 +10,10 @@
 
 class WorkerONNX {
 public:
-	WorkerONNX(PTcontrolPoint pPoint);
+	// workerIndex is the 0-based creation index and workerCount the number of
+	// concurrent control points: together they determine the slice of physical
+	// cores this worker's session owns (see RT::ComputeCpuPartition)
+	WorkerONNX(PTcontrolPoint pPoint, unsigned workerIndex, unsigned workerCount);
 	~WorkerONNX();
 
 	// Helper function for the worker class that allow to start, stop and mark configured 
@@ -23,6 +26,9 @@ private:
 	std::unique_ptr<IEngine> aiEngine;
 	// HANDLE for the local mutex and event
 	PTcontrolPoint controlPointData;
+	unsigned workerIndex;
+	// Slice of physical cores owned by this worker + its ORT session
+	RT::CpuPartition cpuPartition;
 	std::thread workerThread;
 
 	// Handle di sincronizzazione

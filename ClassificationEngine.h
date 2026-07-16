@@ -11,7 +11,7 @@ public:
     ClassificationEngine();
     ~ClassificationEngine() override = default;
 
-    void Initialize(const std::wstring& modelPath) override;
+    void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
 
     // The signature must match IEngine. 
     // For classification: outAnomalyScore -> confidence, outStatus -> class index/name
@@ -36,10 +36,16 @@ private:
     // avoiding a per-frame heap allocation of the whole CHW tensor
     std::vector<float> inputTensorValues;
 
+    // Ort::Value wrapping inputTensorValues, created ONCE at Initialize and
+    // reused by every Run: the tensor is just a view over the same buffer, so
+    // recreating it per frame is pure overhead (zero-copy policy)
+    Ort::Value m_inputTensor{ nullptr };
 
     double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
     double maxRun = 0;
     int frameCount = 0;
 
+    // Pre-allocated OpenCV working buffers reused across frames
     std::vector<cv::Mat> m_splitPlanes;
+    cv::Mat m_resizeImage;
 };

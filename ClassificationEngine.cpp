@@ -1,5 +1,5 @@
 #include "ClassificationEngine.h"
-#include <fmt/core.h>
+#include "AsyncLogger.h"
 #include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
 #include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
 #include <cstring>
@@ -16,12 +16,13 @@ ClassificationEngine::ClassificationEngine()
     memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 }
 
-void ClassificationEngine::Initialize(const std::wstring& modelPath)
+void ClassificationEngine::Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition)
 {
     Ort::SessionOptions sessionOptions;
 
-    // Execution providers + session options: identical policy across all engines.
-    ConfigureOrtSessionOptions(sessionOptions, "Classification");
+    // Execution providers + session options: identical policy across all
+    // engines. The CPU partition sizes and pins this session's intra-op pool.
+    ConfigureOrtSessionOptions(sessionOptions, "Classification", cpuPartition);
 
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
 
@@ -57,8 +58,9 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     }
     inputTensorValues.assign(totalElements, 0.0f);
 
-    // Warmup process using the extracted shape
-    Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
+    // Create the Ort::Value ONCE over the pre-allocated buffer: Infer refills
+    // the buffer in place and reuses this same tensor on every frame
+    m_inputTensor = Ort::Value::CreateTensor<float>(
         memoryInfo, inputTensorValues.data(), inputTensorValues.size(), inputShape.data(), inputShape.size());
 
     const char* inputNames[] = { inputName.c_str() };
@@ -73,12 +75,12 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath)
     double lastMs = 0.0;
     for (int r = 0; r < kWarmupRuns; ++r) {
         auto startTime = std::chrono::steady_clock::now();
-        session->Run(Ort::RunOptions{ nullptr }, inputNames, &inputTensor, 1, warmupOutputNames, 1);
+        session->Run(Ort::RunOptions{ nullptr }, inputNames, &m_inputTensor, 1, warmupOutputNames, 1);
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
         if (r == 0) firstMs = lastMs;
     }
 
-    fmt::print("Classification Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms.\n",
+    Log::Info("Classification Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms.",
         kWarmupRuns, firstMs, lastMs);
 }
 void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
@@ -88,10 +90,10 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
 
     // Wrap the raw pointer into a cv::Mat without copying data
     cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
-    cv::Mat resizeImage;
 
-    // Resize using Nearest Neighbor interpolation for maximum CPU speed
-    cv::resize(rawImg, resizeImage,
+    // Resize into the pre-allocated member buffer (allocated on the first
+    // frame only, then reused) using Nearest Neighbor for maximum CPU speed
+    cv::resize(rawImg, m_resizeImage,
         cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)),
         0, 0, cv::INTER_NEAREST);
 
@@ -108,7 +110,7 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
 
     // Vectorized HWC -> CHW conversion
     const size_t planeSize = static_cast<size_t>(modelHeight) * static_cast<size_t>(modelWidth);
-    cv::split(resizeImage, m_splitPlanes);
+    cv::split(m_resizeImage, m_splitPlanes);
 
     for (int c = 0; c < modelChannels; ++c) {
         const float scale = 1.0f / (255.0f * stddev[c]);
@@ -120,10 +122,8 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
         m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
-    // Create the input tensor wrapping the pre-allocated and populated buffer
-    Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-        memoryInfo, inputTensorValues.data(), inputTensorValues.size(), inputShape.data(), inputShape.size());
-
+    // Zero-copy: m_inputTensor already wraps inputTensorValues, which the
+    // normalization above refilled in place. Nothing to create per frame.
     const char* inputNamesC[] = { inputName.c_str() };
 
     // Use thread_local to initialize the output names array only once, 
@@ -140,7 +140,7 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
 
     // Execute inference
     auto outputTensors = session->Run(
-        Ort::RunOptions{ nullptr }, inputNamesC, &inputTensor, 1, outputNamesC.data(), outputNamesC.size());
+        Ort::RunOptions{ nullptr }, inputNamesC, &m_inputTensor, 1, outputNamesC.data(), outputNamesC.size());
 
     auto t3 = std::chrono::steady_clock::now();
 
@@ -173,7 +173,7 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
     maxRun = std::max(maxRun, ms(t3 - t2).count());
 
     if (++frameCount % 100 == 0) {
-        fmt::print("avg over {}: resize {:.2f} | norm {:.2f} | RUN {:.2f} (max {:.2f}) | post {:.2f}\n",
+        Log::Info("avg over {}: resize {:.2f} | norm {:.2f} | RUN {:.2f} (max {:.2f}) | post {:.2f}",
             frameCount, accResize / frameCount, accNorm / frameCount,
             accRun / frameCount, maxRun, accPost / frameCount);
     }

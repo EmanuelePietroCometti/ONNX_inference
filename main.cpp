@@ -2,31 +2,34 @@
 //
 
 #include "ManagerONNX.h"
-#include <iostream>
-#include <fmt/core.h>
-#include <fmt/color.h>
-
-
+#include "AsyncLogger.h"
+#include "RealTimeConfig.h"
 
 int main()
 {
+    // Logger first: from here on every subsystem logs through the async queue
+    // and the console I/O happens on a low-priority thread pinned to core 0
+    AsyncLogger::Instance().Start();
+
+    // REALTIME priority class (HIGH fallback when not elevated) + 1 ms timer
+    // resolution. Must happen before any worker thread is created.
+    RT::EnableRealTimeProcess();
+
+    // The main thread runs the manager loop: keep it on the reserved core,
+    // away from the inference slices
+    RT::ConfigureControlThread();
+
     try {
         ManagerONNX engine;
-        engine.Run();   
+        engine.Run();
     }
     catch (const std::exception& e)
-    {   
-        fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold, "Exception occurred: {}\n", e.what());
+    {
+        Log::Error("Exception occurred: {}", e.what());
     }
+
+    RT::DisableRealTimeProcess();
+
+    // Drains every queued message before exiting: nothing is lost
+    AsyncLogger::Instance().Shutdown();
 }
-
-// Per eseguire il programma: CTRL+F5 oppure Debug > Avvia senza eseguire debug
-// Per eseguire il debug del programma: F5 oppure Debug > Avvia debug
-
-// Suggerimenti per iniziare: 
-//   1. Usare la finestra Esplora soluzioni per aggiungere/gestire i file
-//   2. Usare la finestra Team Explorer per connettersi al controllo del codice sorgente
-//   3. Usare la finestra di output per visualizzare l'output di compilazione e altri messaggi
-//   4. Usare la finestra Elenco errori per visualizzare gli errori
-//   5. Passare a Progetto > Aggiungi nuovo elemento per creare nuovi file di codice oppure a Progetto > Aggiungi elemento esistente per aggiungere file di codice esistenti al progetto
-//   6. Per aprire di nuovo questo progetto in futuro, passare a File > Apri > Progetto e selezionare il file con estensione sln
