@@ -202,10 +202,12 @@ void WorkerONNX::InferenceLoop()
 			// Throttled telemetry: even this enqueue is allocation-free, the
 			// AsyncLogger consumer does the console I/O on core 0
 			frameCounter++;
+			/*
 			if (frameCounter % 100 == 0) {
 				Log::Info("Worker {} | infer {:.1f} ms | {}", controlPointData->idPunto,
 					inferMs, fmt::string_view(jsonBuf, jsonLen));
 			}
+			*/
 		}
 	}
 	Log::Info(">> Worker thread stopped for control point: {}", controlPointData->idPunto);
