@@ -10,6 +10,16 @@
 
 namespace {
 
+struct CoreInfo {
+    unsigned lp;
+    BYTE efficiencyClass;
+};
+
+struct CoreLayout {
+    std::vector<unsigned> compute;
+    unsigned reserved;
+};
+
 // Enumerates the PHYSICAL cores this process is actually allowed to use and
 // returns one 0-based logical processor id per core.
 //
@@ -25,9 +35,9 @@ namespace {
 //
 // NOTE: limited to processor group 0, i.e. at most 64 logical processors;
 // beyond that SetThreadGroupAffinity and group-aware masks are required.
-std::vector<unsigned> AvailableComputeCores()
+std::vector<CoreInfo> AvailableComputeCores()
 {
-    std::vector<unsigned> cores;
+    std::vector<CoreInfo> cores;
 
     DWORD_PTR processMask = 0;
     DWORD_PTR systemMask = 0;
@@ -51,7 +61,7 @@ std::vector<unsigned> AvailableComputeCores()
                     unsigned bit = 0;
                     while (mask != 0 && (mask & 1) == 0) { mask >>= 1; ++bit; }
                     if (mask != 0 && bit < 64) {
-                        cores.push_back(bit);
+                        cores.push_back({bit, rec->Processor.EfficiencyClass});
                     }
                 }
                 p += rec->Size;
@@ -65,13 +75,38 @@ std::vector<unsigned> AvailableComputeCores()
         const unsigned logical = (std::max)(1u, std::thread::hardware_concurrency());
         for (unsigned i = 0; i < logical && i < 64; ++i) {
             if ((processMask >> i) & 1) {
-                cores.push_back(i);
+                cores.push_back({i, 0});
             }
         }
     }
 
-    std::sort(cores.begin(), cores.end());
+    std::sort(cores.begin(), cores.end(), [](const CoreInfo& a, const CoreInfo& b) {return a.lp < b.lp; });
     return cores;
+}
+
+CoreLayout ClassifyCores() {
+    const std::vector<CoreInfo> cores = AvailableComputeCores();
+    CoreLayout layout{ {}, 0 };
+
+    if (cores.empty()) { return layout; }
+
+    BYTE maxClass = 0;
+
+    for (const CoreInfo& c : cores) maxClass = (std::max)(maxClass, c.efficiencyClass);
+
+    std::vector<unsigned> eCores;
+    for (const CoreInfo& c : cores) {
+        if (c.efficiencyClass == maxClass) layout.compute.push_back(c.lp);
+        else eCores.push_back(c.lp);
+    }
+
+    if (!eCores.empty()) {
+        layout.reserved = eCores.front();
+    }
+    else {
+        layout.reserved = layout.reserved = layout.compute.front();
+        if (layout.compute.size() > 1) layout.compute.erase(layout.compute.begin());
+    }
 }
 
 } // namespace
@@ -122,25 +157,19 @@ CpuPartition ComputeCpuPartition(unsigned workerIndex, unsigned workerCount)
     CpuPartition part;
     if (workerCount == 0) workerCount = 1;
 
-    std::vector<unsigned> cores = AvailableComputeCores();
-
-    // Reserve the first AVAILABLE physical core for the OS share, the manager
-    // and the logger (not hardcoded core 0: on a Codesys machine the low cores
-    // may belong to the PLC runtime and be outside the process affinity mask)
-    if (cores.size() > 1) {
-        cores.erase(cores.begin());
-    }
+    const CoreLayout layout = ClassifyCores();
+    const std::vector<unsigned>& cores = layout.compute;
     const unsigned available = static_cast<unsigned>(cores.size());
 
     if (workerCount >= available) {
         // More workers than compute cores: give each worker one core, wrapping
         // around. Slices overlap, so downstream tuning must stay conservative.
-        part.logicalProcessors.push_back(cores[workerIndex % available]);
-        part.shared = (workerCount > available);
+        part.logicalProcessors = cores;
+        part.shared = true;
         if (part.shared) {
-            Log::Warning("[RT] {} workers on {} compute cores: worker {} SHARES core {} "
-                "(real-time guarantees degraded, reduce concurrent control points)",
-                workerCount, available, workerIndex, part.logicalProcessors.front());
+            Log::Warning("[RT] {} workers on {} P-core(s): worker {} run single-thread {} "
+                "on the SHARED P-core set (first lp {})",
+                workerCount, available, workerIndex, cores.front());
         }
         return part;
     }
@@ -155,7 +184,7 @@ CpuPartition ComputeCpuPartition(unsigned workerIndex, unsigned workerCount)
         part.logicalProcessors.push_back(cores[begin + k]);
     }
 
-    Log::Info("[RT] Worker {} owns {} physical core(s): first logical processor {}",
+    Log::Info("[RT] Worker {} owns {} P-core(s): first logical processor {}",
         workerIndex, count, part.logicalProcessors.front());
     return part;
 }
@@ -179,15 +208,21 @@ void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partitio
     // The worker runs on the FIRST core of its slice; the ORT pool threads of
     // its session are pinned to the remaining slice cores (OrtsessionConfig)
     const unsigned core = partition.logicalProcessors.front();
-    const DWORD_PTR mask = static_cast<DWORD_PTR>(1) << core;
+    DWORD_PTR mask = 0;
+    if (partition.shared) {
+        for (unsigned c : partition.logicalProcessors) mask |= static_cast<DWORD_PTR>(1);
+    }
     if (SetThreadAffinityMask(hThread, mask) == 0) {
         Log::Error("[RT] Worker {}: SetThreadAffinityMask(core {}) failed with code {}",
             workerIndex, core, GetLastError());
     }
     else {
-        Log::Info("[RT] Worker {}: TIME_CRITICAL, pinned to core {} (slice of {} core(s){})",
-            workerIndex, core, partition.logicalProcessors.size(),
-            partition.shared ? ", SHARED" : "");
+        Log::Info("[RT] Worker {}: TIME_CRITICAL, {} ({} core(s) {})",
+            workerIndex, 
+            partition.shared ? "flaoting on shared P set" : "pinned to slice core",
+            partition.logicalProcessors.size(),
+            partition.shared ? ", SHARED" : ""
+        );
     }
 }
 
@@ -201,9 +236,11 @@ void ConfigureBackgroundThread()
     // (which may belong to the Codesys runtime and be outside our affinity mask).
     SetThreadPriority(hThread, THREAD_PRIORITY_LOWEST);
 
-    const std::vector<unsigned> cores = AvailableComputeCores();
-    if (cores.size() > 2) {
-        SetThreadAffinityMask(hThread, static_cast<DWORD_PTR>(1) << cores.front());
+    const CoreLayout layout = ClassifyCores();
+    if (layout.compute.size() > 2) {
+        if (SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(1) << layout.reserved) != 0) {
+            Log::Info("[RT] Control thread pinned to reserved core {}", layout.reserved);
+        }
     }
 }
 
@@ -212,11 +249,10 @@ void ConfigureControlThread()
     // Default priority is kept: the manager only waits on IPC events. Pinning
     // it to the reserved core guarantees it is never scheduled onto a compute
     // core in the middle of a frame.
-    const std::vector<unsigned> cores = AvailableComputeCores();
-    if (cores.size() > 2) {
-        const unsigned core = cores.front();
-        if (SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(1) << core) != 0) {
-            Log::Info("[RT] Control thread pinned to reserved core {}", core);
+    const CoreLayout layout = ClassifyCores();
+    if (layout.compute.size() > 2) {
+        if (SetThreadAffinityMask(GetCurrentThread(), static_cast<DWORD_PTR>(1) << layout.reserved) != 0) {
+            Log::Info("[RT] Control thread pinned to reserved core {}", layout.reserved);
         }
     }
 }

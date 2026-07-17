@@ -83,12 +83,8 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
     // WRONG on the production target, where hyper-threading is disabled and
     // that heuristic halves the real core count.
     unsigned sliceThreads;
-    if (cpuPartition.logicalProcessors.empty()) {
-        const unsigned computeCores = RT::PhysicalCoreCount();
-        sliceThreads = computeCores > 1 ? computeCores - 1 : 1;
-    }
-    else {
-        sliceThreads = static_cast<unsigned>(cpuPartition.logicalProcessors.size());
+    if (cpuPartition.shared) {
+        sliceThreads = 1;
     }
 
 #if defined(ORT_EP_GPU)
@@ -221,7 +217,7 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
         // intra_op_num_threads - 1 affinity entries: the calling thread (our
         // worker, pinned by RT::ConfigureInferenceThread to slice core 0) is
         // the pool's implicit first member. ORT processor ids are 1-BASED.
-        if (cpuPartition.logicalProcessors.size() > 1) {
+        if (!cpuPartition.shared && cpuPartition.logicalProcessors.size() > 1) {
             std::string affinity;
             for (size_t t = 1; t < cpuPartition.logicalProcessors.size(); ++t) {
                 if (!affinity.empty()) affinity += ';';
