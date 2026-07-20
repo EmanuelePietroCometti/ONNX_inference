@@ -8,6 +8,16 @@
 // behavior: process priority class, per-thread priority, CPU affinity and the
 // partitioning of physical cores among concurrent inference sessions.
 //
+// Compile-time switch: define RT_DISABLE_AFFINITY (project-wide, e.g.
+// C/C++ > Preprocessor > /DRT_DISABLE_AFFINITY) to drop every
+// SetThreadAffinityMask call and let the Windows scheduler (and Intel Thread
+// Director on hybrid P/E CPUs) place threads freely. Priorities, priority
+// class and the 1 ms timer resolution stay active. ComputeCpuPartition then
+// returns an EMPTY partition, which the rest of the code already interprets
+// as "no pinning": each ORT session sizes its intra-op pool on all compute
+// cores (not on a slice) and intra-op spinning is forced OFF, because a
+// thread that does not own a core must never busy-wait on it.
+//
 // Core layout policy (multiple concurrent control points, different models):
 //   - Cores OUTSIDE the process affinity mask are never touched: on the
 //     production target the Codesys runtime reserves whole cores for the PLC

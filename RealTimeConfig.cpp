@@ -120,6 +120,16 @@ unsigned PhysicalCoreCount()
 CpuPartition ComputeCpuPartition(unsigned workerIndex, unsigned workerCount)
 {
     CpuPartition part;
+#ifdef RT_DISABLE_AFFINITY
+    // Affinity disabled at build time: return an empty partition. Downstream
+    // this means no SetThreadAffinityMask, ORT pool sized on all compute
+    // cores, intra-op spinning OFF (see RealTimeConfig.h).
+    (void)workerIndex;
+    (void)workerCount;
+    Log::Info("[RT] RT_DISABLE_AFFINITY: worker {} not pinned, thread placement left to the OS scheduler",
+        workerIndex);
+    return part;
+#else
     if (workerCount == 0) workerCount = 1;
 
     std::vector<unsigned> cores = AvailableComputeCores();
@@ -158,6 +168,7 @@ CpuPartition ComputeCpuPartition(unsigned workerIndex, unsigned workerCount)
     Log::Info("[RT] Worker {} owns {} physical core(s): first logical processor {}",
         workerIndex, count, part.logicalProcessors.front());
     return part;
+#endif // RT_DISABLE_AFFINITY
 }
 
 void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partition)
@@ -172,7 +183,13 @@ void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partitio
     }
 
     if (partition.logicalProcessors.empty()) {
+#ifdef RT_DISABLE_AFFINITY
+        // Expected under RT_DISABLE_AFFINITY: priority is raised, placement
+        // stays with the OS scheduler / Thread Director.
+        Log::Info("[RT] Worker {}: TIME_CRITICAL, not pinned (RT_DISABLE_AFFINITY)", workerIndex);
+#else
         Log::Warning("[RT] Worker {}: empty CPU partition, affinity pinning skipped", workerIndex);
+#endif
         return;
     }
 
@@ -201,14 +218,17 @@ void ConfigureBackgroundThread()
     // (which may belong to the Codesys runtime and be outside our affinity mask).
     SetThreadPriority(hThread, THREAD_PRIORITY_LOWEST);
 
+#ifndef RT_DISABLE_AFFINITY
     const std::vector<unsigned> cores = AvailableComputeCores();
     if (cores.size() > 2) {
         SetThreadAffinityMask(hThread, static_cast<DWORD_PTR>(1) << cores.front());
     }
+#endif
 }
 
 void ConfigureControlThread()
 {
+#ifndef RT_DISABLE_AFFINITY
     // Default priority is kept: the manager only waits on IPC events. Pinning
     // it to the reserved core guarantees it is never scheduled onto a compute
     // core in the middle of a frame.
@@ -219,6 +239,7 @@ void ConfigureControlThread()
             Log::Info("[RT] Control thread pinned to reserved core {}", core);
         }
     }
+#endif
 }
 
 } // namespace RT
