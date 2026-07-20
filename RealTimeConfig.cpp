@@ -8,6 +8,8 @@
 
 #pragma comment(lib, "winmm.lib")
 
+#define RT_DISABLE_AFFINITY 1
+
 namespace {
 
 // Enumerates the PHYSICAL cores this process is actually allowed to use and
@@ -120,7 +122,7 @@ unsigned PhysicalCoreCount()
 CpuPartition ComputeCpuPartition(unsigned workerIndex, unsigned workerCount)
 {
     CpuPartition part;
-#ifdef RT_DISABLE_AFFINITY
+#if RT_DISABLE_AFFINITY
     // Affinity disabled at build time: return an empty partition. Downstream
     // this means no SetThreadAffinityMask, ORT pool sized on all compute
     // cores, intra-op spinning OFF (see RealTimeConfig.h).
@@ -183,7 +185,7 @@ void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partitio
     }
 
     if (partition.logicalProcessors.empty()) {
-#ifdef RT_DISABLE_AFFINITY
+#if RT_DISABLE_AFFINITY
         // Expected under RT_DISABLE_AFFINITY: priority is raised, placement
         // stays with the OS scheduler / Thread Director.
         Log::Info("[RT] Worker {}: TIME_CRITICAL, not pinned (RT_DISABLE_AFFINITY)", workerIndex);
@@ -218,17 +220,19 @@ void ConfigureBackgroundThread()
     // (which may belong to the Codesys runtime and be outside our affinity mask).
     SetThreadPriority(hThread, THREAD_PRIORITY_LOWEST);
 
-#ifndef RT_DISABLE_AFFINITY
+#if !RT_DISABLE_AFFINITY
     const std::vector<unsigned> cores = AvailableComputeCores();
     if (cores.size() > 2) {
         SetThreadAffinityMask(hThread, static_cast<DWORD_PTR>(1) << cores.front());
     }
+#else
+    Log::Info("[RT] Backgorund thread not pinned, thread placement left to the OS scheduler");
 #endif
 }
 
 void ConfigureControlThread()
 {
-#ifndef RT_DISABLE_AFFINITY
+#if !RT_DISABLE_AFFINITY
     // Default priority is kept: the manager only waits on IPC events. Pinning
     // it to the reserved core guarantees it is never scheduled onto a compute
     // core in the middle of a frame.
@@ -239,6 +243,8 @@ void ConfigureControlThread()
             Log::Info("[RT] Control thread pinned to reserved core {}", core);
         }
     }
+#else
+    Log::Info("[RT] Control thread not pinned, thread placement left to the OS scheduler");
 #endif
 }
 
