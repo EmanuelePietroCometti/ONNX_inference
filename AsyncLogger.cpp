@@ -18,12 +18,34 @@ AsyncLogger::~AsyncLogger()
     Shutdown();
 }
 
+// fmt emette i colori come sequenze ANSI (\x1b[38;2;...m): il conhost classico
+// non le interpreta finche' non si attiva ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+// e le stampa letteralmente come "<-[38;2;...m". Se l'attivazione fallisce
+// (console troppo vecchia) i colori vengono semplicemente disabilitati.
+static bool s_ansiColorSupported = false;
+
+static void EnableVTProcessing()
+{
+    s_ansiColorSupported = true;
+    for (DWORD stdHandle : { STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) {
+        HANDLE h = GetStdHandle(stdHandle);
+        DWORD mode = 0;
+        if (h == NULL || h == INVALID_HANDLE_VALUE || !GetConsoleMode(h, &mode)) {
+            continue;   // stream redirezionato su file/pipe: non e' una console
+        }
+        if (!SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+            s_ansiColorSupported = false;
+        }
+    }
+}
+
 void AsyncLogger::Start()
 {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
         return; // already started
     }
+    EnableVTProcessing();
     consumer_ = std::thread(&AsyncLogger::ConsumerLoop, this);
 }
 
@@ -93,12 +115,14 @@ size_t AsyncLogger::DrainQueue()
         const fmt::string_view text(local.text, local.length);
         switch (local.level) {
         case LogLevel::Error:
-            fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold,
+            fmt::print(stderr, s_ansiColorSupported
+                ? fg(fmt::color::red) | fmt::emphasis::bold : fmt::text_style{},
                 "{:02}:{:02}:{:02}.{:03} [ERR ] {}\n",
                 local.ts.wHour, local.ts.wMinute, local.ts.wSecond, local.ts.wMilliseconds, text);
             break;
         case LogLevel::Warning:
-            fmt::print(fg(fmt::color::yellow),
+            fmt::print(s_ansiColorSupported
+                ? fg(fmt::color::yellow) : fmt::text_style{},
                 "{:02}:{:02}:{:02}.{:03} [WARN] {}\n",
                 local.ts.wHour, local.ts.wMinute, local.ts.wSecond, local.ts.wMilliseconds, text);
             break;
@@ -112,7 +136,8 @@ size_t AsyncLogger::DrainQueue()
 
     const uint64_t dropped = dropped_.exchange(0, std::memory_order_relaxed);
     if (dropped > 0) {
-        fmt::print(stderr, fg(fmt::color::red) | fmt::emphasis::bold,
+        fmt::print(stderr, s_ansiColorSupported
+            ? fg(fmt::color::red) | fmt::emphasis::bold : fmt::text_style{},
             "[LOGGER] {} messages dropped (queue full)\n", dropped);
     }
     return printed;
