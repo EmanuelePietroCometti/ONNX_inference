@@ -166,15 +166,19 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
 
     // Profiling and metrics
     using ms = std::chrono::duration<double, std::milli>;
-    accResize += ms(t1 - t0).count();
-    accNorm += ms(t2 - t1).count();
-    accRun += ms(t3 - t2).count();
-    accPost += ms(t4 - t3).count();
+    accResize = ((frameCount-1)*ms(t1 - t0).count())/frameCount;
+    accNorm = ((frameCount-1)*ms(t2 - t1).count())/frameCount;
+    accRun = ((frameCount-1)*ms(t3 - t2).count())/frameCount;
+    accPost = ((frameCount-1)*ms(t4 - t3).count())/frameCount;
     maxRun = std::max(maxRun, ms(t3 - t2).count());
 
     if (++frameCount % 100 == 0) {
         Log::Info("avg over {}: resize {:.2f} | norm {:.2f} | RUN {:.2f} (max {:.2f}) | post {:.2f}",
-            frameCount, accResize / frameCount, accNorm / frameCount,
-            accRun / frameCount, maxRun, accPost / frameCount);
+            frameCount, accResize, accNorm,
+            accRun, maxRun, accPost);
+		ZeroMemory(&accResize, sizeof(accResize));
+		ZeroMemory(&accNorm, sizeof(accNorm));
+		ZeroMemory(&accRun, sizeof(accRun));
+		ZeroMemory(&accPost, sizeof(accPost));
     }
 }
