@@ -164,9 +164,9 @@ void WorkerONNX::InferenceLoop()
 				// statusStr carries the class id as text; on error publish -1
 				const auto out = inferenceError
 					? fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
-						R"({{"class_id":-1,"confidence":0.0}})")
+						R"({{"class_id":"-1","confidence":0.0}})")
 					: fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
-						R"({{"class_id":{},"confidence":{:.6f}}})", statusStr, anomalyScore);
+						R"({{"class_id":"{}","confidence":{:.6f}}})", statusStr, anomalyScore);
 				jsonLen = out.size;
 			}
 			jsonLen = (jsonLen < sizeof(jsonBuf)) ? jsonLen : sizeof(jsonBuf) - 1;

@@ -19,6 +19,8 @@ public:
         void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus) override;
 
 private:
+    void LoadGraphContract();
+
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> session;
     Ort::MemoryInfo memoryInfo{ nullptr };
@@ -31,6 +33,17 @@ private:
     int64_t modelChannels = 3;
     int64_t modelHeight = 0;
     int64_t modelWidth = 0;
+
+    // Index-ordered class names read from the 'names_ordered' metadata entry.
+    // The graph itself only emits class_id, so this vector is the only mapping
+    // from index to label. Never hardcode it: the order is defined by the
+    // training run and changes whenever the class folders change.
+    std::vector<std::string> m_classNames;
+
+    // Resolved once at Initialize: the two graph outputs actually consumed.
+    // Requesting only these lets ORT prune the rest of the graph.
+    std::string m_outClassIdName;
+    std::string m_outConfidenceName;
 
     // Input tensor buffer allocated once at Initialize and reused on every Infer,
     // avoiding a per-frame heap allocation of the whole CHW tensor
@@ -48,4 +61,5 @@ private:
     // Pre-allocated OpenCV working buffers reused across frames
     std::vector<cv::Mat> m_splitPlanes;
     cv::Mat m_resizeImage;
+    cv::Mat m_rgbImage;
 };
