@@ -69,24 +69,51 @@ private:
 	int scoreIdx = -1;
 	int mapIdx = -1;
 
-	// Heatmap processing buffers
+	// Heatmap / overlay processing buffers (reused across frames)
 	bool writeHeatmap = true;
-	cv::Mat m_uint8Heatmap, m_largeHeatmap, m_rgbHeatmap;
+	cv::Mat m_uint8Heatmap;   // display-normalized map, uint8 [0,255] at model res
+	cv::Mat m_largeHeatmap;   // above, resized to original resolution
+	cv::Mat m_colorHeat;      // LUT-colored heatmap, RGB
+	cv::Mat m_overlay;        // final blended overlay, RGB (written to output buffer)
+	cv::Mat m_maskFull;       // pred_mask resized to original resolution
 
-	// Normalization statistics parsed from model custom metadata.
-	// Used to perform post-processing: normalized = clamp((raw - min) / (max - min), 0, 1)
-	float globalMin = 0.0f;
-	float globalMax = 1.0f;
-	float rawThreshold = 0.5f;         // Threshold in raw score space
-	float normalizedThreshold = 0.5f;  // Threshold mapped to [0, 1] range
+	// --- Contract / calibration metadata (contract 3.0) ---
+	// Read once at Initialize from the ONNX custom metadata. Nothing here is
+	// computed at runtime: no hardcoded thresholds, no per-frame statistics.
+	std::string exportContract;          // must equal "3.0"
+	bool normalizationInGraph = false;   // normalization == "in_graph": skip host norm
+
+	// Display-normalization range for the anomaly map (calibration_map_min/max):
+	// v = clamp((map - mapMin) / (mapMax - mapMin), 0, 1). See render_reference.py [D-Q1].
+	float mapMin = 0.0f;
+	float mapMax = 1.0f;
+
+	// Image-level decision threshold, in the FINAL score space of the graph
+	// (calibrated_threshold). Compared directly to the raw score (contract 3.0:
+	// score is final, CONTRACT.md §2.1).
+	float scoreThreshold = 0.5f;
+
+	// Pixel-level threshold on the final map for the pred_mask overlay
+	// (calibrated_threshold_pixel). Optional: not all architectures export it.
+	float pixelThreshold = 0.0f;
+	bool hasPixelThreshold = false;
+
+	// Shared jet colormap (render_lut_rgb_b64): 256x1 CV_8UC3, RGB, decoded from
+	// the base64 metadata. Consumed byte-identical to render_reference.py [D-Q3].
+	cv::Mat m_lutRgb;
+
+	// Alpha blending constant, out = (1-a)*img + a*heatmap. render_reference.py [D-Q5].
+	float m_blendAlpha = 0.5f;
 
 	double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
 	double maxRun = 0;
 	int frameCount = 0;
 
 	/**
-	 * @brief Extracts normalization metadata (min, max, threshold) from the ONNX file
-	 * and calculates the normalized threshold for classification decisions.
+	 * @brief Loads and validates the contract 3.0 metadata from the ONNX file:
+	 * rejects models that are not contract 3.0 or not verified, reads the
+	 * calibration thresholds, the display range and the shared colormap LUT.
+	 * Throws std::runtime_error (pointing at calibrate_threshold.py) on failure.
 	 */
-	void LoadNormalizationMetadata();
+	void LoadContractMetadata();
 };

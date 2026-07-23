@@ -146,6 +146,17 @@ void WorkerONNX::InferenceLoop()
 				inferenceError = true;
 			}
 
+			// On error, force the published values to the error sentinel BEFORE
+			// building the JSON. Infer() may throw AFTER it already wrote
+			// statusStr="OK"/"REJECT" and anomalyScore (e.g. the score path
+			// succeeded but heatmap rendering threw): without this reset the
+			// ANOMALY JSON below would carry that stale "valid" result while the
+			// state is ERROR_DETECTED — an inconsistency a consumer could act on.
+			if (inferenceError) {
+				statusStr.assign("ERROR");
+				anomalyScore = 0.0f;
+			}
+
 			const double inferMs = std::chrono::duration<double, std::milli>(
 				std::chrono::steady_clock::now() - inferStart).count();
 

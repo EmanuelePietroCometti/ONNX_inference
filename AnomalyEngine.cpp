@@ -9,6 +9,37 @@
 #include <thread>
 #include <unordered_map>
 #include "OrtsessionConfig.h"
+#include <array>
+#include <stdexcept>
+
+namespace {
+    // Minimal RFC 4648 base64 decoder. Used to unpack render_lut_rgb_b64
+    // (768 bytes = 256x3 uint8 RGB) from the ONNX metadata, so the runtime
+    // depends on no extra base64 library.
+    std::vector<uint8_t> Base64Decode(const std::string& in) {
+        static constexpr char kPad = '=';
+        std::array<int, 256> T{};
+        T.fill(-1);
+        const char* alphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; i < 64; ++i) T[static_cast<unsigned char>(alphabet[i])] = i;
+
+        std::vector<uint8_t> out;
+        out.reserve(in.size() * 3 / 4);
+        int val = 0, bits = -8;
+        for (unsigned char c : in) {
+            if (c == kPad) break;
+            if (T[c] == -1) continue; // skip whitespace/newlines
+            val = (val << 6) + T[c];
+            bits += 6;
+            if (bits >= 0) {
+                out.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
+                bits -= 8;
+            }
+        }
+        return out;
+    }
+}
 
 AnomalyEngine::AnomalyEngine()
 {
@@ -29,9 +60,10 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
     Log::Info("ONNX Session created successfully for Anomaly Detection.");
 
-    // Read global_min / global_max / threshold from the ONNX metadata and
-    // pre-compute the normalized threshold used at inference time
-    LoadNormalizationMetadata();
+    // Validate the export contract and read all calibration metadata (thresholds,
+    // display range, colormap LUT) from the ONNX file. Rejects non-3.0 or
+    // unverified models before any inference is attempted.
+    LoadContractMetadata();
 
     try {
         // Initialize the allocator with default options for node name retrieval
@@ -112,49 +144,98 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
     }
 }
 
-void AnomalyEngine::LoadNormalizationMetadata()
+void AnomalyEngine::LoadContractMetadata()
 {
     Ort::AllocatorWithDefaultOptions allocator;
     Ort::ModelMetadata metadata = session->GetModelMetadata();
 
-    // Different export pipelines embed the same value under different keys,
-    // so each stat is looked up through a list of known aliases
-    auto lookupFloat = [&](std::initializer_list<const char*> keys, float& target) -> bool {
-        for (const char* key : keys) {
-            auto value = metadata.LookupCustomMetadataMapAllocated(key, allocator);
-            if (value) {
-                target = std::stof(value.get());
-                Log::Info("Metadata '{}' = {}", key, target);
-                return true;
-            }
+    auto lookupString = [&](const char* key) -> std::string {
+        auto value = metadata.LookupCustomMetadataMapAllocated(key, allocator);
+        return value ? std::string(value.get()) : std::string();
+        };
+    auto lookupFloat = [&](const char* key, float& target) -> bool {
+        auto value = metadata.LookupCustomMetadataMapAllocated(key, allocator);
+        if (value) {
+            target = std::stof(value.get());
+            Log::Info("Metadata '{}' = {}", key, target);
+            return true;
         }
         return false;
         };
 
-    const bool hasMin = lookupFloat({ "calibration_global_min", "min" }, globalMin);
-    const bool hasMax = lookupFloat({ "calibration_global_max", "max" }, globalMax);
-    const bool hasThreshold = lookupFloat({ "calibrated_threshold", "threshold", "global_threshold" }, rawThreshold);
+    // --- Contract gate: refuse anything that is not a verified 3.0 export ---
+    // The error message names the tool that fixes it, so an operator who sees
+    // it in the log knows exactly what to run.
+    exportContract = lookupString("export_contract");
+    const std::string verified = lookupString("verified");
+
+    if (exportContract != "3.0") {
+        throw std::runtime_error(
+            "Anomaly model rejected: export_contract='" +
+            (exportContract.empty() ? std::string("<missing>") : exportContract) +
+            "', expected '3.0'. Re-export the model with the current export_onnx.py.");
+    }
+    if (verified != "true") {
+        throw std::runtime_error(
+            "Anomaly model rejected: metadata 'verified' != 'true' (the model has "
+            "not been calibrated). Run calibrate_threshold.py on this .onnx to "
+            "write calibrated_threshold / calibration_map_min / calibration_map_max "
+            "/ render_lut_rgb_b64 and set verified=true.");
+    }
+
+    // normalization=in_graph -> the graph already applies ImageNet normalization
+    // (InGraphNormalize). The host must feed RGB in [0,1] and must NOT normalize
+    // again, otherwise the score collapses (CONTRACT.md §1.4, double norm).
+    const std::string normalization = lookupString("normalization");
+    normalizationInGraph = (normalization == "in_graph");
+    if (!normalizationInGraph) {
+        // Contract 3.0 is always in_graph; if we ever see something else the
+        // preprocessing assumption is wrong, so make it loud rather than silent.
+        Log::Warning("### WARNING: normalization='{}' (expected 'in_graph' for contract 3.0). "
+            "Host will apply ImageNet normalization as a fallback.", normalization);
+    }
+
+    // --- Calibration values (no defaults silently accepted for a 3.0 model) ---
+    const bool hasMin = lookupFloat("calibration_map_min", mapMin);
+    const bool hasMax = lookupFloat("calibration_map_max", mapMax);
+    const bool hasThreshold = lookupFloat("calibrated_threshold", scoreThreshold);
+    hasPixelThreshold = lookupFloat("calibrated_threshold_pixel", pixelThreshold);
 
     if (!hasMin || !hasMax || !hasThreshold) {
-        Log::Warning(
-            "### WARNING: normalization metadata incomplete (min:{} max:{} threshold:{}). "
-            "Falling back to defaults, scores will NOT match the Python model.",
-            hasMin, hasMax, hasThreshold);
+        throw std::runtime_error(
+            "Anomaly model rejected: verified=true but calibration metadata is "
+            "incomplete (calibration_map_min/calibration_map_max/calibrated_threshold). "
+            "Re-run calibrate_threshold.py.");
     }
 
-    // Guard against a degenerate range that would divide by zero
-    const float range = globalMax - globalMin;
-    if (range <= 0.0f) {
-        throw std::runtime_error("Invalid normalization metadata: global_max must be greater than global_min.");
+    // Guard against a degenerate display range that would divide by zero
+    if (mapMax - mapMin <= 0.0f) {
+        throw std::runtime_error(
+            "Invalid calibration metadata: calibration_map_max must be greater than "
+            "calibration_map_min.");
     }
 
-    // Same min-max mapping Anomalib applies in Python: comparing the normalized
-    // score against this normalized threshold is equivalent to comparing the raw
-    // score against the raw threshold, so the OK/REJECT decision is identical
-    normalizedThreshold = (rawThreshold - globalMin) / range;
+    // --- Shared colormap LUT (render_lut_rgb_b64 -> 256x1 CV_8UC3, RGB) ---
+    const std::string lutB64 = lookupString("render_lut_rgb_b64");
+    if (lutB64.empty()) {
+        throw std::runtime_error(
+            "Anomaly model rejected: 'render_lut_rgb_b64' missing. Re-run "
+            "calibrate_threshold.py to embed the shared jet colormap.");
+    }
+    const std::vector<uint8_t> lutBytes = Base64Decode(lutB64);
+    if (lutBytes.size() != 256 * 3) {
+        throw std::runtime_error(
+            "Invalid render_lut_rgb_b64: decoded " + std::to_string(lutBytes.size()) +
+            " bytes, expected 768 (256x3 uint8 RGB).");
+    }
+    // Store as 256x1 CV_8UC3 so it can drive cv::applyColorMap directly. The
+    // channel order of the output equals the byte order of the LUT (RGB).
+    m_lutRgb.create(256, 1, CV_8UC3);
+    std::memcpy(m_lutRgb.data, lutBytes.data(), lutBytes.size());
 
-    Log::Info("Normalization ready: globalMin={}, globalMax={}, rawThreshold={}, normalizedThreshold={}",
-        globalMin, globalMax, rawThreshold, normalizedThreshold);
+    Log::Info("Contract 3.0 verified. mapMin={}, mapMax={}, scoreThreshold={}, "
+        "pixelThreshold={} (present={}), LUT loaded, normalizationInGraph={}.",
+        mapMin, mapMax, scoreThreshold, pixelThreshold, hasPixelThreshold, normalizationInGraph);
 }
 
 void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height,
@@ -168,22 +249,28 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)),
         0, 0, cv::INTER_LINEAR);
 
-    // Image normalization parameters (standard ImageNet statistics)
+    // ImageNet statistics, used ONLY in the non-in_graph fallback path
     const float mean[] = { 0.485f, 0.456f, 0.406f };
     const float stddev[] = { 0.229f, 0.224f, 0.225f };
     const size_t planeSize = static_cast<size_t>(modelHeight) * static_cast<size_t>(modelWidth);
 
-    // Convert HWC format to planar 3xHW format and apply normalization
+    // Convert HWC uint8 -> planar float32 CHW. Contract 3.0 (normalization=in_graph):
+    // feed RGB in [0,1] and let the graph's InGraphNormalize apply ImageNet norm.
+    // Normalizing on the host as well would double the normalization and collapse
+    // the score (CONTRACT.md §1.4). The input buffer is assumed RGB ([D-Q4]),
+    // so split plane 0 == R, matching the graph's expected channel order.
     cv::split(m_resizeImage, m_splitPlanes);
     for (int c = 0; c < modelChannels; ++c) {
-        const float scale = 1.0f / (255.0f * stddev[c]);
-        const float offset = mean[c] / stddev[c];
+        // in_graph:      dst = pixel / 255
+        // host fallback: dst = pixel * scale - offset  (ImageNet)
+        const float scale = normalizationInGraph ? (1.0f / 255.0f)
+                                                 : (1.0f / (255.0f * stddev[c]));
+        const float offset = normalizationInGraph ? 0.0f : (mean[c] / stddev[c]);
 
         // Map tensor memory to cv::Mat for efficient pixel-wise operation
         cv::Mat planeF32(static_cast<int>(modelHeight), static_cast<int>(modelWidth), CV_32FC1,
             inputTensorValues.data() + static_cast<size_t>(c) * planeSize);
 
-        // Normalize: dst = (pixel * scale) - offset
         m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
@@ -204,28 +291,61 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
             throw std::runtime_error("Anomaly model does not expose a scalar score output.");
     }
 
-    // Process raw anomaly score: normalize to [0, 1] using metadata min/max
+    // Contract 3.0: the score is FINAL and directly comparable to
+    // calibrated_threshold (CONTRACT.md §2.1). Publish it as-is — no runtime
+    // min-max, no runtime statistics. The OK/REJECT decision matches
+    // calibrate_threshold.py (score >= threshold, Youden).
     const float rawScore = outputTensors[scoreIdx].GetTensorMutableData<float>()[0];
-    outAnomalyScore = std::clamp((rawScore - globalMin) / (globalMax - globalMin), 0.0f, 1.0f);
-    outStatus = (outAnomalyScore > normalizedThreshold) ? "REJECT" : "OK";
+    outAnomalyScore = rawScore;
+    outStatus = (rawScore >= scoreThreshold) ? "REJECT" : "OK";
 
-    // Optional: Generate and scale heatmap if requested and supported by model
+    // Heatmap rendering. Mirrors render_reference.py::render() step by step;
+    // each block cites the corresponding line of the Python reference. The
+    // reference is the normative spec (tools/parity_check.py verifies parity).
     if (writeHeatmap && pOutputHeatmap && mapIdx >= 0) {
         auto s = outputTensors[mapIdx].GetTensorTypeAndShapeInfo().GetShape();
         int64_t hmH = s[s.size() - 2], hmW = s[s.size() - 1];
         float* pHeatmap = outputTensors[mapIdx].GetTensorMutableData<float>();
+
+        // [Passo 1] render_reference.py:131 — source: the final map from the graph.
         cv::Mat floatHeatmap(static_cast<int>(hmH), static_cast<int>(hmW), CV_32FC1, pHeatmap);
 
-        // Scale raw heatmap values to uint8 [0, 255] range
-        const double alpha = 255.0 / (globalMax - globalMin);
-        const double beta = -255.0 * globalMin / (globalMax - globalMin);
+        // [Passo 2/2b] render_reference.py:134,141 — display-normalize with the
+        // fixed global range and quantize to uint8:
+        // g = round(clamp((map - mapMin)/(mapMax - mapMin), 0, 1) * 255).
+        // convertTo saturates to [0,255], which is the clamp; the fused
+        // scale/offset is the affine map (mapMin->0, mapMax->255).
+        const double alpha = 255.0 / (mapMax - mapMin);
+        const double beta = -255.0 * mapMin / (mapMax - mapMin);
         floatHeatmap.convertTo(m_uint8Heatmap, CV_8UC1, alpha, beta);
 
-        // Resize back to original input image size and convert to BGR for output
+        // [Passo 3] render_reference.py:144 — resize to the original resolution,
+        // INTER_LINEAR, AFTER the normalization ([D-Q2]).
         cv::resize(m_uint8Heatmap, m_largeHeatmap, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-        cv::cvtColor(m_largeHeatmap, m_rgbHeatmap, cv::COLOR_GRAY2BGR);
 
-        // Copy output buffer to the user-provided destination
-        memcpy(pOutputHeatmap, m_rgbHeatmap.data, static_cast<size_t>(width) * height * channels);
+        // [Passo 4] render_reference.py:148 — colormap via the shared LUT. The
+        // LUT is RGB, so applyColorMap emits RGB ([D-Q3]). No library colormap.
+        cv::applyColorMap(m_largeHeatmap, m_colorHeat, m_lutRgb);
+
+        // [Passo 5] render_reference.py:152 — alpha blend on the original image
+        // (assumed RGB, [D-Q4/Q5]): out = (1-a)*img + a*heatmap.
+        cv::addWeighted(rawImg, 1.0 - m_blendAlpha, m_colorHeat, m_blendAlpha, 0.0, m_overlay);
+
+        // [Passo 6] render_reference.py:158 — pred_mask overlay: threshold the
+        // FINAL map against calibrated_threshold_pixel, draw red contours
+        // (RGB (255,0,0)) thickness 2. Skipped when the model exports no pixel
+        // threshold ([D-Q6]).
+        if (hasPixelThreshold) {
+            // MatExpr comparison yields a CV_8UC1 mask (0/255), same as the
+            // reference's (m >= pixel_threshold) at model resolution.
+            cv::Mat maskModel = floatHeatmap >= pixelThreshold;
+            cv::resize(maskModel, m_maskFull, cv::Size(width, height), 0, 0, cv::INTER_NEAREST);
+            std::vector<std::vector<cv::Point>> contours;
+            cv::findContours(m_maskFull, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+            cv::drawContours(m_overlay, contours, -1, cv::Scalar(255, 0, 0), 2);
+        }
+
+        // Output is RGB ([D-Q4]); copy the overlay to the shared buffer.
+        memcpy(pOutputHeatmap, m_overlay.data, static_cast<size_t>(width) * height * channels);
     }
 }
