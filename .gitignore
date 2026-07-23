@@ -360,7 +360,6 @@ MigrationBackup/
 .ionide/
 
 # Fody - auto-generated XML schema
-trt_cache/
 .vscode/
 
 LocalConfig.props
@@ -368,3 +367,19 @@ LocalConfig_Debug.props
 LocalConfig_Release.props
 SDK/
 *.diagsession
+trt_engine_cache/
+trt_timing_cache/
+/nvinfer_10.dll
+/nvinfer_builder_resource_ptx_10.dll
+/nvinfer_builder_resource_sm100_10.dll
+/nvinfer_builder_resource_sm120_10.dll
+/nvinfer_builder_resource_sm75_10.dll
+/nvinfer_builder_resource_sm80_10.dll
+/nvinfer_builder_resource_sm86_10.dll
+/nvinfer_builder_resource_sm89_10.dll
+/nvinfer_builder_resource_sm90_10.dll
+/nvinfer_dispatch_10.dll
+/nvinfer_plugin_10.dll
+/nvinfer_lean_10.dll
+/nvinfer_vc_plugin_10.dll
+/nvonnxparser_10.dll

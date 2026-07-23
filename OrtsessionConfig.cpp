@@ -167,26 +167,50 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
     // (or interfere), so disable them and let OpenVINO own the optimization.
     so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
 
+    // Define active targets dynamically to adjust based on the selected backend
+    std::string targetDevice = "GPU";
+    std::string targetPrecision = "FP16"; // Critical Optimization: Intel UHD GPUs process FP16 natively and much faster than FP32
+
     try {
         std::unordered_map<std::string, std::string> ov;
-        ov["device_type"] = "CPU";   // "GPU,CPU" or "AUTO:GPU,CPU" to prefer an Intel GPU
-        ov["precision"] = "FP32";  // "FP16" if the device supports it and accuracy holds
-        ov["num_streams"] = "1";     // single stream: minimize single-frame latency
-        // Size the OpenVINO pool on this session's core slice, not the whole
-        // machine: with concurrent control points every session spawning a
-        // full-machine pool would oversubscribe all cores
+        ov["device_type"] = targetDevice;
+        ov["precision"] = targetPrecision;
+        ov["num_streams"] = "1"; // Single stream to minimize single-frame latency
+
+        // Thread limits apply if OpenVINO offloads certain operators to the CPU
         ov["num_of_threads"] = std::to_string(sliceThreads);
 
         so.AppendExecutionProvider_OpenVINO_V2(ov);
+
         hardwareAccelerated = true;
-        Log::Info("[{}] OpenVINO EP appended (CPU, FP32, 1 stream, {} threads).", tag, sliceThreads);
+        Log::Info("[{}] OpenVINO EP successfully appended. Active Device: {} (Precision: {}, 1 stream, {} threads).",
+            tag, targetDevice, targetPrecision, sliceThreads);
     }
     catch (const Ort::Exception& e) {
-        // Fallback runs on the built-in CPU EP: re-enable ORT fusions, which are
-        // exactly what we want on CPU. hardwareAccelerated stays false so the
-        // unified CPU tuning block below applies threads/arena/denormals.
-        so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        Log::Warning("[{}] OpenVINO unavailable, falling back to CPU: {}", tag, e.what());
+        // DYNAMIC FALLBACK Level 1: If the Intel GPU initialization fails, attempt to run OpenVINO on the CPU
+        Log::Warning("[{}] Failed to initialize OpenVINO on GPU: {}. Attemping fallback to OpenVINO CPU...", tag, e.what());
+
+        try {
+            targetDevice = "CPU";
+            targetPrecision = "FP32"; // The CPU handles standard FP32 math operations more efficiently
+
+            std::unordered_map<std::string, std::string> ov_cpu;
+            ov_cpu["device_type"] = targetDevice;
+            ov_cpu["precision"] = targetPrecision;
+            ov_cpu["num_streams"] = "1";
+            ov_cpu["num_of_threads"] = std::to_string(sliceThreads);
+
+            so.AppendExecutionProvider_OpenVINO_V2(ov_cpu);
+            hardwareAccelerated = true; // Still accelerated via OpenVINO engine, but executing on CPU
+            Log::Info("[{}] OpenVINO EP appended via Fallback. Active Device: {} (Precision: {}, 1 stream, {} threads).",
+                tag, targetDevice, targetPrecision, sliceThreads);
+        }
+        catch (const Ort::Exception& e_cpu) {
+            // FINAL FALLBACK Level 2: Entirely disable OpenVINO and revert to native ONNX Runtime CPU EP
+            so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            hardwareAccelerated = false;
+            Log::Error("[{}] OpenVINO completely unavailable. Falling back to native ONNX Runtime CPU: {}", tag, e_cpu.what());
+        }
     }
 
 #elif defined(ORT_EP_CPU)

@@ -185,19 +185,20 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Command>
+xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO' or '$(Configuration)'=='Release-CPU')">
@@ -208,19 +209,20 @@ xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Comman
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"</Command>
+xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
