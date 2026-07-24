@@ -383,3 +383,4 @@ trt_timing_cache/
 /nvinfer_lean_10.dll
 /nvinfer_vc_plugin_10.dll
 /nvonnxparser_10.dll
+/trt_cache

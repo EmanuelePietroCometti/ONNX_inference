@@ -1,7 +1,7 @@
 #include "AnomalyEngine.h"
 #include "AsyncLogger.h"
-#include <xmmintrin.h> // For _MM_SET_FLUSH_ZERO_MODE
-#include <pmmintrin.h> // For _MM_SET_DENORMALS_ZERO_MODE
+#include <xmmintrin.h> 
+#include <pmmintrin.h> 
 #include <algorithm>
 #include <cstring>
 #include <chrono>
@@ -12,16 +12,17 @@
 #include <array>
 #include <stdexcept>
 
+#if defined(ORT_EP_GPU)
+#include <cuda_runtime.h>
+#endif
+
 namespace {
-    // Minimal RFC 4648 base64 decoder. Used to unpack render_lut_rgb_b64
-    // (768 bytes = 256x3 uint8 RGB) from the ONNX metadata, so the runtime
-    // depends on no extra base64 library.
+    // Minimal RFC 4648 base64 decoder...
     std::vector<uint8_t> Base64Decode(const std::string& in) {
         static constexpr char kPad = '=';
         std::array<int, 256> T{};
         T.fill(-1);
-        const char* alphabet =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         for (int i = 0; i < 64; ++i) T[static_cast<unsigned char>(alphabet[i])] = i;
 
         std::vector<uint8_t> out;
@@ -29,7 +30,7 @@ namespace {
         int val = 0, bits = -8;
         for (unsigned char c : in) {
             if (c == kPad) break;
-            if (T[c] == -1) continue; // skip whitespace/newlines
+            if (T[c] == -1) continue;
             val = (val << 6) + T[c];
             bits += 6;
             if (bits >= 0) {
@@ -43,104 +44,140 @@ namespace {
 
 AnomalyEngine::AnomalyEngine()
 {
-    // Initialize ONNX Environment (Warning level, log id)
     env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "AnomalyEngineEnv");
     memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+}
+
+AnomalyEngine::~AnomalyEngine() {
+#if defined(ORT_EP_GPU)
+    // Safely free VRAM blocks allocated via CUDA to prevent memory leaks
+    if (d_input) cudaFree(d_input);
+    if (d_score) cudaFree(d_score);
+    if (d_map) cudaFree(d_map);
+#endif
 }
 
 void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition)
 {
     Ort::SessionOptions sessionOptions;
 
-    // Execution providers + session options: identical policy across all
-    // engines. The CPU partition sizes and pins this session's intra-op pool.
-    ConfigureOrtSessionOptions(sessionOptions, "Anomaly", cpuPartition);
+    // Check runtime hardware acceleration status to enable/disable CUDA bindings dynamically
+    m_useGpuIoBinding = ConfigureOrtSessionOptions(sessionOptions, "Anomaly", cpuPartition);
 
-    // Create the session
     session = std::make_unique<Ort::Session>(*env, modelPath.c_str(), sessionOptions);
     Log::Info("ONNX Session created successfully for Anomaly Detection.");
 
-    // Validate the export contract and read all calibration metadata (thresholds,
-    // display range, colormap LUT) from the ONNX file. Rejects non-3.0 or
-    // unverified models before any inference is attempted.
     LoadContractMetadata();
 
     try {
-        // Initialize the allocator with default options for node name retrieval
         Ort::AllocatorWithDefaultOptions allocator;
-
-        // Retrieve and store the input node name
         inputName = session->GetInputNameAllocated(0, allocator).get();
 
-        // Retrieve all output node names and store them in the persistent vector
         outputNames.clear();
         for (size_t idx = 0; idx < session->GetOutputCount(); ++idx) {
             outputNames.emplace_back(session->GetOutputNameAllocated(idx, allocator).get());
         }
 
-        // Build the C-style pointer array once to ensure valid memory addresses for the inference call
-        outputNamesC.clear();
-        outputNamesC.reserve(outputNames.size());
-        for (const auto& n : outputNames) {
-            outputNamesC.push_back(n.c_str());
+        // --- Extrapolate Output Indices BEFORE allocation ---
+        for (size_t idx = 0; idx < session->GetOutputCount(); ++idx) {
+            auto shape = session->GetOutputTypeInfo(idx).GetTensorTypeAndShapeInfo().GetShape();
+            if (shape.size() == 1 || (shape.size() == 2 && shape[1] == 1)) {
+                if (scoreIdx < 0) scoreIdx = static_cast<int>(idx);
+            }
+            else if (shape.size() >= 3) {
+                if (mapIdx < 0) mapIdx = static_cast<int>(idx);
+            }
         }
+        if (scoreIdx < 0) throw std::runtime_error("Anomaly model missing scalar score output.");
 
-        // Extract model input shape and dimensions from TypeInfo
+        // --- Geometry Extrapolation & Sanitization ---
         Ort::TypeInfo typeInfo = session->GetInputTypeInfo(0);
         inputShape = typeInfo.GetTensorTypeAndShapeInfo().GetShape();
-
-        // Handle dynamic batch size by defaulting to 1
-        if (inputShape[0] == -1) {
-            inputShape[0] = 1;
-        }
+        if (inputShape[0] == -1) inputShape[0] = 1;
 
         modelChannels = inputShape[1];
         modelHeight = inputShape[2];
         modelWidth = inputShape[3];
 
-        // Pre-allocate the input buffer based on the calculated tensor size
-        size_t totalElements = 1;
-        for (int64_t d : inputShape) {
-            totalElements *= d;
+        m_scoreShape = session->GetOutputTypeInfo(scoreIdx).GetTensorTypeAndShapeInfo().GetShape();
+        for (auto& d : m_scoreShape) if (d < 0) d = 1;
+
+        if (mapIdx >= 0) {
+            m_mapShape = session->GetOutputTypeInfo(mapIdx).GetTensorTypeAndShapeInfo().GetShape();
+            for (auto& d : m_mapShape) if (d < 0) d = 1;
         }
-        inputTensorValues.assign(totalElements, 0.0f);
+
+        // --- Calculate Buffer Sizes ---
+        size_t inputElements = 1;
+        for (int64_t d : inputShape) inputElements *= d;
+
+        size_t mapElements = 1;
+        if (mapIdx >= 0) {
+            for (int64_t d : m_mapShape) mapElements *= d;
+        }
+
+        // Host allocations (required for pre-processing / fallback)
+        inputTensorValues.assign(inputElements, 0.0f);
         m_splitPlanes.resize(modelChannels);
+        m_hostScore.assign(1, 0.0f);
+        if (mapIdx >= 0) m_hostMap.assign(mapElements, 0.0f);
 
-        // Create the input tensor wrapper ONCE using the pre-allocated buffer;
-        // Infer refills the buffer in place and reuses this same Ort::Value
-        m_inputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo,
-            inputTensorValues.data(),
-            inputTensorValues.size(),
-            inputShape.data(),
-            inputShape.size()
-        );
+        // --- Setup I/O Binding ---
+        io_binding = std::make_unique<Ort::IoBinding>(*session);
 
-        // Define names for the warmup execution
-        const char* inputNames[] = { inputName.c_str() };
-        const char* warmupOutputNames[] = { outputNames[0].c_str() };
+#if defined(ORT_EP_GPU)
+        if (m_useGpuIoBinding) {
+            // Pre-allocate GPU VRAM strictly for Zero-Copy tensor operation
+            if (cudaMalloc(&d_input, inputElements * sizeof(float)) != cudaSuccess) throw std::runtime_error("CUDA Malloc input");
+            if (cudaMalloc(&d_score, sizeof(float)) != cudaSuccess) throw std::runtime_error("CUDA Malloc score");
+            if (mapIdx >= 0 && cudaMalloc(&d_map, mapElements * sizeof(float)) != cudaSuccess) throw std::runtime_error("CUDA Malloc map");
 
-        // Execute Warmup Runs.
-        // The first run triggers engine building (TensorRT compilation) and
-        // memory allocation; the following ones stabilize the execution path so
-        // the first REAL frame does not hit a cold engine. This happens at
-        // Configure time, before the camera trigger starts.
+            Ort::MemoryInfo cudaMemInfo("Cuda", OrtDeviceAllocator, 0, OrtMemTypeDefault);
+
+            m_inputTensor = Ort::Value::CreateTensor<float>(cudaMemInfo, d_input, inputElements, inputShape.data(), inputShape.size());
+            io_binding->BindInput(inputName.c_str(), m_inputTensor);
+
+            m_scoreTensor = Ort::Value::CreateTensor<float>(cudaMemInfo, d_score, 1, m_scoreShape.data(), m_scoreShape.size());
+            io_binding->BindOutput(outputNames[scoreIdx].c_str(), m_scoreTensor);
+
+            if (mapIdx >= 0) {
+                m_mapTensor = Ort::Value::CreateTensor<float>(cudaMemInfo, d_map, mapElements, m_mapShape.data(), m_mapShape.size());
+                io_binding->BindOutput(outputNames[mapIdx].c_str(), m_mapTensor);
+            }
+            Log::Info("GPU I/O Binding established with Zero-Copy VRAM tensors.");
+        }
+        else
+#endif
+        {
+            // Fallback: CPU Direct Memory Mapping
+            m_inputTensor = Ort::Value::CreateTensor<float>(memoryInfo, inputTensorValues.data(), inputElements, inputShape.data(), inputShape.size());
+            io_binding->BindInput(inputName.c_str(), m_inputTensor);
+
+            m_scoreTensor = Ort::Value::CreateTensor<float>(memoryInfo, m_hostScore.data(), 1, m_scoreShape.data(), m_scoreShape.size());
+            io_binding->BindOutput(outputNames[scoreIdx].c_str(), m_scoreTensor);
+
+            if (mapIdx >= 0) {
+                m_mapTensor = Ort::Value::CreateTensor<float>(memoryInfo, m_hostMap.data(), mapElements, m_mapShape.data(), m_mapShape.size());
+                io_binding->BindOutput(outputNames[mapIdx].c_str(), m_mapTensor);
+            }
+            Log::Info("CPU I/O Binding established with System RAM mapping.");
+        }
+
+        // --- Warmup Runs (Must use IoBinding to compile correct graph segment) ---
         constexpr int kWarmupRuns = 50;
-        double firstMs = 0.0;
-        double lastMs = 0.0;
+        double firstMs = 0.0, lastMs = 0.0;
         for (int r = 0; r < kWarmupRuns; ++r) {
             auto startTime = std::chrono::steady_clock::now();
-            session->Run(Ort::RunOptions{ nullptr }, inputNames, &m_inputTensor, 1, warmupOutputNames, 1);
+            session->Run(Ort::RunOptions{ nullptr }, *io_binding);
             lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
             if (r == 0) firstMs = lastMs;
         }
 
-        Log::Info("Warmup completed successfully: {} runs, first {:.1f} ms, last {:.1f} ms. Engine is locked and ready for real-time inference.",
-            kWarmupRuns, firstMs, lastMs);
+        Log::Info("Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms. Engine locked.", kWarmupRuns, firstMs, lastMs);
     }
     catch (const Ort::Exception& e) {
-        Log::Error("### ERROR DURING WARMUP: {}", e.what());
-        throw; // Escalate the error, as an un-warmed engine cannot guarantee production timings
+        Log::Error("### ERROR DURING INITIALIZATION: {}", e.what());
+        throw;
     }
 }
 
@@ -241,111 +278,66 @@ void AnomalyEngine::LoadContractMetadata()
 void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height,
     uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
 {
-    // Wrap raw input buffer into an OpenCV Mat for processing
     cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
+    cv::resize(rawImg, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_AREA);
 
-    // Resize input to match model's expected dimensions
-    cv::resize(rawImg, m_resizeImage,
-        cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)),
-        0, 0, cv::INTER_LINEAR);
-
-    // ImageNet statistics, used ONLY in the non-in_graph fallback path
     const float mean[] = { 0.485f, 0.456f, 0.406f };
     const float stddev[] = { 0.229f, 0.224f, 0.225f };
     const size_t planeSize = static_cast<size_t>(modelHeight) * static_cast<size_t>(modelWidth);
 
-    // Convert HWC uint8 -> planar float32 CHW. Contract 3.0 (normalization=in_graph):
-    // feed RGB in [0,1] and let the graph's InGraphNormalize apply ImageNet norm.
-    // Normalizing on the host as well would double the normalization and collapse
-    // the score (CONTRACT.md §1.4). The input buffer is assumed RGB ([D-Q4]),
-    // so split plane 0 == R, matching the graph's expected channel order.
     cv::split(m_resizeImage, m_splitPlanes);
     for (int c = 0; c < modelChannels; ++c) {
-        // in_graph:      dst = pixel / 255
-        // host fallback: dst = pixel * scale - offset  (ImageNet)
-        const float scale = normalizationInGraph ? (1.0f / 255.0f)
-                                                 : (1.0f / (255.0f * stddev[c]));
+        const float scale = normalizationInGraph ? (1.0f / 255.0f) : (1.0f / (255.0f * stddev[c]));
         const float offset = normalizationInGraph ? 0.0f : (mean[c] / stddev[c]);
 
-        // Map tensor memory to cv::Mat for efficient pixel-wise operation
+        // Write processed data directly into host buffer
         cv::Mat planeF32(static_cast<int>(modelHeight), static_cast<int>(modelWidth), CV_32FC1,
             inputTensorValues.data() + static_cast<size_t>(c) * planeSize);
-
         m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
-    // Zero-copy: m_inputTensor already wraps inputTensorValues, which the
-    // normalization above refilled in place. Nothing to create per frame.
-    const char* inputNamesC[] = { inputName.c_str() };
-    auto outputTensors = session->Run(Ort::RunOptions{ nullptr },
-        inputNamesC, &m_inputTensor, 1, outputNamesC.data(), outputNamesC.size());
-
-    // Identify output indices for score and heatmap upon first execution
-    if (scoreIdx < 0) {
-        for (size_t idx = 0; idx < outputTensors.size(); ++idx) {
-            auto info = outputTensors[idx].GetTensorTypeAndShapeInfo();
-            if (info.GetElementCount() == 1 && scoreIdx < 0)    scoreIdx = static_cast<int>(idx);
-            else if (info.GetShape().size() >= 3 && mapIdx < 0) mapIdx = static_cast<int>(idx);
-        }
-        if (scoreIdx < 0)
-            throw std::runtime_error("Anomaly model does not expose a scalar score output.");
+#if defined(ORT_EP_GPU)
+    // Synchronous memory transfer: Only triggers if hardware acceleration is active
+    if (m_useGpuIoBinding) {
+        cudaMemcpy(d_input, inputTensorValues.data(), inputTensorValues.size() * sizeof(float), cudaMemcpyHostToDevice);
     }
+#endif
 
-    // Contract 3.0: the score is FINAL and directly comparable to
-    // calibrated_threshold (CONTRACT.md §2.1). Publish it as-is — no runtime
-    // min-max, no runtime statistics. The OK/REJECT decision matches
-    // calibrate_threshold.py (score >= threshold, Youden).
-    const float rawScore = outputTensors[scoreIdx].GetTensorMutableData<float>()[0];
+    // Run inference matching exactly the bound VRAM/RAM buffers
+    session->Run(Ort::RunOptions{ nullptr }, *io_binding);
+
+#if defined(ORT_EP_GPU)
+    if (m_useGpuIoBinding) {
+        // Retrieve processed buffers from VRAM
+        cudaMemcpy(m_hostScore.data(), d_score, sizeof(float), cudaMemcpyDeviceToHost);
+        if (mapIdx >= 0) {
+            cudaMemcpy(m_hostMap.data(), d_map, m_hostMap.size() * sizeof(float), cudaMemcpyDeviceToHost);
+        }
+    }
+#endif
+
+    const float rawScore = m_hostScore[0];
     outAnomalyScore = rawScore;
     outStatus = (rawScore >= scoreThreshold) ? "REJECT" : "OK";
 
-    // Heatmap rendering. Mirrors render_reference.py::render() step by step;
-    // each block cites the corresponding line of the Python reference. The
-    // reference is the normative spec (tools/parity_check.py verifies parity).
     if (writeHeatmap && pOutputHeatmap && mapIdx >= 0) {
-        auto s = outputTensors[mapIdx].GetTensorTypeAndShapeInfo().GetShape();
-        int64_t hmH = s[s.size() - 2], hmW = s[s.size() - 1];
-        float* pHeatmap = outputTensors[mapIdx].GetTensorMutableData<float>();
+        // Point OpenCV directly to our bound host map buffer
+        cv::Mat floatHeatmap(static_cast<int>(m_mapShape[2]), static_cast<int>(m_mapShape[3]), CV_32FC1, m_hostMap.data());
 
-        // [Passo 1] render_reference.py:131 — source: the final map from the graph.
-        cv::Mat floatHeatmap(static_cast<int>(hmH), static_cast<int>(hmW), CV_32FC1, pHeatmap);
-
-        // [Passo 2/2b] render_reference.py:134,141 — display-normalize with the
-        // fixed global range and quantize to uint8:
-        // g = round(clamp((map - mapMin)/(mapMax - mapMin), 0, 1) * 255).
-        // convertTo saturates to [0,255], which is the clamp; the fused
-        // scale/offset is the affine map (mapMin->0, mapMax->255).
         const double alpha = 255.0 / (mapMax - mapMin);
         const double beta = -255.0 * mapMin / (mapMax - mapMin);
         floatHeatmap.convertTo(m_uint8Heatmap, CV_8UC1, alpha, beta);
-
-        // [Passo 3] render_reference.py:144 — resize to the original resolution,
-        // INTER_LINEAR, AFTER the normalization ([D-Q2]).
         cv::resize(m_uint8Heatmap, m_largeHeatmap, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-
-        // [Passo 4] render_reference.py:148 — colormap via the shared LUT. The
-        // LUT is RGB, so applyColorMap emits RGB ([D-Q3]). No library colormap.
         cv::applyColorMap(m_largeHeatmap, m_colorHeat, m_lutRgb);
-
-        // [Passo 5] render_reference.py:152 — alpha blend on the original image
-        // (assumed RGB, [D-Q4/Q5]): out = (1-a)*img + a*heatmap.
         cv::addWeighted(rawImg, 1.0 - m_blendAlpha, m_colorHeat, m_blendAlpha, 0.0, m_overlay);
 
-        // [Passo 6] render_reference.py:158 — pred_mask overlay: threshold the
-        // FINAL map against calibrated_threshold_pixel, draw red contours
-        // (RGB (255,0,0)) thickness 2. Skipped when the model exports no pixel
-        // threshold ([D-Q6]).
         if (hasPixelThreshold) {
-            // MatExpr comparison yields a CV_8UC1 mask (0/255), same as the
-            // reference's (m >= pixel_threshold) at model resolution.
             cv::Mat maskModel = floatHeatmap >= pixelThreshold;
             cv::resize(maskModel, m_maskFull, cv::Size(width, height), 0, 0, cv::INTER_NEAREST);
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(m_maskFull, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
             cv::drawContours(m_overlay, contours, -1, cv::Scalar(255, 0, 0), 2);
         }
-
-        // Output is RGB ([D-Q4]); copy the overlay to the shared buffer.
         memcpy(pOutputHeatmap, m_overlay.data, static_cast<size_t>(width) * height * channels);
     }
 }

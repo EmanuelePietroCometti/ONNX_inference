@@ -9,12 +9,9 @@
 class ClassificationEngine : public IEngine {
 public:
     ClassificationEngine();
-    ~ClassificationEngine() override = default;
+    ~ClassificationEngine() override;
 
     void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
-
-    // The signature must match IEngine. 
-    // For classification: outAnomalyScore -> confidence, outStatus -> class index/name
     void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
         void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus) override;
 
@@ -25,40 +22,41 @@ private:
     std::unique_ptr<Ort::Session> session;
     Ort::MemoryInfo memoryInfo{ nullptr };
 
-    // I/O names and input shape extracted from the model graph at Initialize time,
-    // so Infer never relies on hardcoded names or dimensions
+    std::unique_ptr<Ort::IoBinding> io_binding;
+    bool m_useGpuIoBinding = false;
+
     std::string inputName;
     std::vector<std::string> outputNames;
     std::vector<int64_t> inputShape;
+    std::vector<int64_t> m_classIdShape;
+    std::vector<int64_t> m_confShape;
+
     int64_t modelChannels = 3;
     int64_t modelHeight = 0;
     int64_t modelWidth = 0;
 
-    // Index-ordered class names read from the 'names_ordered' metadata entry.
-    // The graph itself only emits class_id, so this vector is the only mapping
-    // from index to label. Never hardcode it: the order is defined by the
-    // training run and changes whenever the class folders change.
     std::vector<std::string> m_classNames;
-
-    // Resolved once at Initialize: the two graph outputs actually consumed.
-    // Requesting only these lets ORT prune the rest of the graph.
     std::string m_outClassIdName;
     std::string m_outConfidenceName;
 
-    // Input tensor buffer allocated once at Initialize and reused on every Infer,
-    // avoiding a per-frame heap allocation of the whole CHW tensor
-    std::vector<float> inputTensorValues;
-
-    // Ort::Value wrapping inputTensorValues, created ONCE at Initialize and
-    // reused by every Run: the tensor is just a view over the same buffer, so
-    // recreating it per frame is pure overhead (zero-copy policy)
     Ort::Value m_inputTensor{ nullptr };
+    Ort::Value m_classIdTensor{ nullptr };
+    Ort::Value m_confidenceTensor{ nullptr };
+
+    std::vector<float> inputTensorValues;
+    std::vector<int64_t> m_hostClassId;
+    std::vector<float> m_hostConfidence;
+
+#if defined(ORT_EP_GPU)
+    float* d_input = nullptr;
+    int64_t* d_classId = nullptr;
+    float* d_confidence = nullptr;
+#endif
 
     double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
     double maxRun = 0;
     int frameCount = 0;
 
-    // Pre-allocated OpenCV working buffers reused across frames
     std::vector<cv::Mat> m_splitPlanes;
     cv::Mat m_resizeImage;
     cv::Mat m_rgbImage;
