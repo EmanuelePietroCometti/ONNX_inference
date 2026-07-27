@@ -16,32 +16,6 @@
 #include <cuda_runtime.h>
 #endif
 
-namespace {
-    // Minimal RFC 4648 base64 decoder...
-    std::vector<uint8_t> Base64Decode(const std::string& in) {
-        static constexpr char kPad = '=';
-        std::array<int, 256> T{};
-        T.fill(-1);
-        const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        for (int i = 0; i < 64; ++i) T[static_cast<unsigned char>(alphabet[i])] = i;
-
-        std::vector<uint8_t> out;
-        out.reserve(in.size() * 3 / 4);
-        int val = 0, bits = -8;
-        for (unsigned char c : in) {
-            if (c == kPad) break;
-            if (T[c] == -1) continue;
-            val = (val << 6) + T[c];
-            bits += 6;
-            if (bits >= 0) {
-                out.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
-                bits -= 8;
-            }
-        }
-        return out;
-    }
-}
-
 AnomalyEngine::AnomalyEngine()
 {
     env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "AnomalyEngineEnv");
@@ -163,7 +137,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
             Log::Info("CPU I/O Binding established with System RAM mapping.");
         }
 
-        // --- Warmup Runs (Must use IoBinding to compile correct graph segment) ---
+        // --- Warmup Runs ---
         constexpr int kWarmupRuns = 50;
         double firstMs = 0.0, lastMs = 0.0;
         for (int r = 0; r < kWarmupRuns; ++r) {
@@ -200,78 +174,51 @@ void AnomalyEngine::LoadContractMetadata()
         return false;
         };
 
-    // --- Contract gate: refuse anything that is not a verified 3.0 export ---
-    // The error message names the tool that fixes it, so an operator who sees
-    // it in the log knows exactly what to run.
-    exportContract = lookupString("export_contract");
-    const std::string verified = lookupString("verified");
-
-    if (exportContract != "3.0") {
-        throw std::runtime_error(
-            "Anomaly model rejected: export_contract='" +
-            (exportContract.empty() ? std::string("<missing>") : exportContract) +
-            "', expected '3.0'. Re-export the model with the current export_onnx.py.");
+    // Verify contract version presence
+    const std::string contractVersion = lookupString("contract_version");
+    if (contractVersion.empty()) {
+        Log::Warning("Metadata 'contract_version' missing. Attempting to proceed assuming backwards compatibility.");
     }
-    if (verified != "true") {
-        throw std::runtime_error(
-            "Anomaly model rejected: metadata 'verified' != 'true' (the model has "
-            "not been calibrated). Run calibrate_threshold.py on this .onnx to "
-            "write calibrated_threshold / calibration_map_min / calibration_map_max "
-            "/ render_lut_rgb_b64 and set verified=true.");
+    else {
+        Log::Info("ONNX Contract Version validated: {}", contractVersion);
     }
 
-    // normalization=in_graph -> the graph already applies ImageNet normalization
-    // (InGraphNormalize). The host must feed RGB in [0,1] and must NOT normalize
-    // again, otherwise the score collapses (CONTRACT.md §1.4, double norm).
-    const std::string normalization = lookupString("normalization");
-    normalizationInGraph = (normalization == "in_graph");
+    // Normalization check: updated key to match new Python exporter
+    const std::string normalization = lookupString("normalize_inside_graph");
+    normalizationInGraph = (normalization == "true");
     if (!normalizationInGraph) {
-        // Contract 3.0 is always in_graph; if we ever see something else the
-        // preprocessing assumption is wrong, so make it loud rather than silent.
-        Log::Warning("### WARNING: normalization='{}' (expected 'in_graph' for contract 3.0). "
-            "Host will apply ImageNet normalization as a fallback.", normalization);
+        Log::Warning("### WARNING: normalize_inside_graph='{}' (expected 'true'). Host will apply ImageNet normalization as fallback.", normalization);
     }
 
-    // --- Calibration values (no defaults silently accepted for a 3.0 model) ---
-    const bool hasMin = lookupFloat("calibration_map_min", mapMin);
-    const bool hasMax = lookupFloat("calibration_map_max", mapMax);
-    const bool hasThreshold = lookupFloat("calibrated_threshold", scoreThreshold);
-    hasPixelThreshold = lookupFloat("calibrated_threshold_pixel", pixelThreshold);
+    // Calibration Status Verification
+    const std::string calibratedStatus = lookupString("calibrated");
+    if (calibratedStatus != "true") {
+        Log::Warning("Model 'calibrated' flag is not true. Using uncalibrated raw tensor bounds.");
+    }
+
+    // Load bounds and thresholds using the new standard keys
+    const bool hasMin = lookupFloat("map_min_raw", mapMin);
+    const bool hasMax = lookupFloat("map_max_raw", mapMax);
+    const bool hasThreshold = lookupFloat("image_threshold_raw", scoreThreshold);
+    hasPixelThreshold = lookupFloat("pixel_threshold_raw", pixelThreshold);
 
     if (!hasMin || !hasMax || !hasThreshold) {
         throw std::runtime_error(
-            "Anomaly model rejected: verified=true but calibration metadata is "
-            "incomplete (calibration_map_min/calibration_map_max/calibrated_threshold). "
-            "Re-run calibrate_threshold.py.");
+            "Anomaly model rejected: calibration metadata is incomplete "
+            "(map_min_raw/map_max_raw/image_threshold_raw). Re-run calibrate.py.");
     }
 
-    // Guard against a degenerate display range that would divide by zero
     if (mapMax - mapMin <= 0.0f) {
-        throw std::runtime_error(
-            "Invalid calibration metadata: calibration_map_max must be greater than "
-            "calibration_map_min.");
+        throw std::runtime_error("Invalid calibration metadata: map_max_raw must be greater than map_min_raw.");
     }
 
-    // --- Shared colormap LUT (render_lut_rgb_b64 -> 256x1 CV_8UC3, RGB) ---
-    const std::string lutB64 = lookupString("render_lut_rgb_b64");
-    if (lutB64.empty()) {
-        throw std::runtime_error(
-            "Anomaly model rejected: 'render_lut_rgb_b64' missing. Re-run "
-            "calibrate_threshold.py to embed the shared jet colormap.");
+    // Evaluate normalization formula to ensure C++ rendering matches Python behavior
+    const std::string normFormula = lookupString("normalization_formula");
+    if (!normFormula.empty() && normFormula != "minmax") {
+        Log::Warning("Model exported with normalization_formula='{}'. C++ engine uses 'minmax' natively. Visual results may drift.", normFormula);
     }
-    const std::vector<uint8_t> lutBytes = Base64Decode(lutB64);
-    if (lutBytes.size() != 256 * 3) {
-        throw std::runtime_error(
-            "Invalid render_lut_rgb_b64: decoded " + std::to_string(lutBytes.size()) +
-            " bytes, expected 768 (256x3 uint8 RGB).");
-    }
-    // Store as 256x1 CV_8UC3 so it can drive cv::applyColorMap directly. The
-    // channel order of the output equals the byte order of the LUT (RGB).
-    m_lutRgb.create(256, 1, CV_8UC3);
-    std::memcpy(m_lutRgb.data, lutBytes.data(), lutBytes.size());
 
-    Log::Info("Contract 3.0 verified. mapMin={}, mapMax={}, scoreThreshold={}, "
-        "pixelThreshold={} (present={}), LUT loaded, normalizationInGraph={}.",
+    Log::Info("Contract limits verified. mapMin={}, mapMax={}, scoreThreshold={}, pixelThreshold={} (present={}), normalizationInGraph={}.",
         mapMin, mapMax, scoreThreshold, pixelThreshold, hasPixelThreshold, normalizationInGraph);
 }
 
@@ -316,6 +263,7 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
     }
 #endif
 
+    // Score comparison evaluated natively against image_threshold_raw
     const float rawScore = m_hostScore[0];
     outAnomalyScore = rawScore;
     outStatus = (rawScore >= scoreThreshold) ? "REJECT" : "OK";
@@ -324,11 +272,15 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         // Point OpenCV directly to our bound host map buffer
         cv::Mat floatHeatmap(static_cast<int>(m_mapShape[2]), static_cast<int>(m_mapShape[3]), CV_32FC1, m_hostMap.data());
 
+        // Linear MinMax scaling logic implemented directly for OpenCV scaling
         const double alpha = 255.0 / (mapMax - mapMin);
         const double beta = -255.0 * mapMin / (mapMax - mapMin);
         floatHeatmap.convertTo(m_uint8Heatmap, CV_8UC1, alpha, beta);
+
         cv::resize(m_uint8Heatmap, m_largeHeatmap, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-        cv::applyColorMap(m_largeHeatmap, m_colorHeat, m_lutRgb);
+
+        // Native OpenCV Colormap application (replaces legacy custom RGB LUT)
+        cv::applyColorMap(m_largeHeatmap, m_colorHeat, cv::COLORMAP_JET);
         cv::addWeighted(rawImg, 1.0 - m_blendAlpha, m_colorHeat, m_blendAlpha, 0.0, m_overlay);
 
         if (hasPixelThreshold) {

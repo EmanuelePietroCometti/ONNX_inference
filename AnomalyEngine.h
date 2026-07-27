@@ -77,7 +77,6 @@ private:
     float scoreThreshold = 0.5f;
     float pixelThreshold = 0.0f;
     bool hasPixelThreshold = false;
-    cv::Mat m_lutRgb;
     float m_blendAlpha = 0.5f;
 
     double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
