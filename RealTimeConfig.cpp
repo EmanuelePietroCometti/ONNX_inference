@@ -92,20 +92,21 @@ bool EnableRealTimeProcess()
     // activity. Windows only grants it to elevated processes: when the
     // privilege is missing the call "succeeds" but the class is silently
     // downgraded, so the actual class must be read back and verified.
-    SetPriorityClass(hProcess, REALTIME_PRIORITY_CLASS);
-    const DWORD granted = GetPriorityClass(hProcess);
-
-    if (granted == REALTIME_PRIORITY_CLASS) {
+    if (SetPriorityClass(hProcess, REALTIME_PRIORITY_CLASS)) {
         Log::Info("[RT] Process priority class: REALTIME");
         return true;
     }
 
-    if (!SetPriorityClass(hProcess, HIGH_PRIORITY_CLASS)) {
-        Log::Error("[RT] SetPriorityClass(HIGH) failed with code {}", GetLastError());
-        return false;
+    DWORD rtError = GetLastError();
+    Log::Warning("[RT] REALTIME class not granted (Error: {}). Falling back to HIGH priority class.", rtError);
+
+    if (SetPriorityClass(hProcess, HIGH_PRIORITY_CLASS)) {
+        Log::Info("[RT] Process priority class: HIGH");
+        return true;
     }
-    Log::Warning("[RT] REALTIME class not granted (run elevated to enable it). "
-        "Falling back to HIGH priority class.");
+    DWORD highError = GetLastError();
+    Log::Error("### ERROR: Impossible setting REALTIME or HIGH priority class. Final Error: {}", highError);
+
     return false;
 }
 
@@ -179,26 +180,28 @@ void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partitio
 
     // TIME_CRITICAL: base priority 15 in HIGH class, 31 in REALTIME class.
     // The worker must preempt everything else the moment the frame event fires.
-    if (!SetThreadPriority(hThread, THREAD_PRIORITY_TIME_CRITICAL)) {
-        Log::Error("[RT] Worker {}: SetThreadPriority(TIME_CRITICAL) failed with code {}",
-            workerIndex, GetLastError());
+    if (SetThreadPriority(hThread, THREAD_PRIORITY_TIME_CRITICAL)) {
+        Log::Info("[RT] Worker {}: SetThreadPriority to THREAD_PRIORITY_TIME_CRITICAL", workerIndex);
     }
-
+    else {
+        DWORD rtError = GetLastError();
+        Log::Error("[RT] Worker {}: SetThreadPriority failed with code {}", workerIndex, rtError);
+    }
+#if not RT_DISABLE_AFFINITY
     if (partition.logicalProcessors.empty()) {
-#if RT_DISABLE_AFFINITY
         // Expected under RT_DISABLE_AFFINITY: priority is raised, placement
         // stays with the OS scheduler / Thread Director.
-        Log::Info("[RT] Worker {}: TIME_CRITICAL, not pinned (RT_DISABLE_AFFINITY)", workerIndex);
-#else
         Log::Warning("[RT] Worker {}: empty CPU partition, affinity pinning skipped", workerIndex);
-#endif
         return;
     }
-
     // The worker runs on the FIRST core of its slice; the ORT pool threads of
     // its session are pinned to the remaining slice cores (OrtsessionConfig)
     const unsigned core = partition.logicalProcessors.front();
+
+    // NOTE: This bitwise shift is only safe if 'core' < 64 (on x64 architectures).
+    // For systems with >64 logical processors, SetThreadGroupAffinity must be used instead.
     const DWORD_PTR mask = static_cast<DWORD_PTR>(1) << core;
+
     if (SetThreadAffinityMask(hThread, mask) == 0) {
         Log::Error("[RT] Worker {}: SetThreadAffinityMask(core {}) failed with code {}",
             workerIndex, core, GetLastError());
@@ -208,8 +211,8 @@ void ConfigureInferenceThread(unsigned workerIndex, const CpuPartition& partitio
             workerIndex, core, partition.logicalProcessors.size(),
             partition.shared ? ", SHARED" : "");
     }
+#endif
 }
-
 void ConfigureBackgroundThread()
 {
     HANDLE hThread = GetCurrentThread();
