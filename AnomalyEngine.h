@@ -69,9 +69,10 @@ private:
     cv::Mat m_overlay;
     cv::Mat m_maskFull;
 
-    // Contract 3.0 metadata
     std::string exportContract;
     bool normalizationInGraph = false;
+
+    bool m_convertBgrToRgb = true;
     float mapMin = 0.0f;
     float mapMax = 1.0f;
     float scoreThreshold = 0.5f;

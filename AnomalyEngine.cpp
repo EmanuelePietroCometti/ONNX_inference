@@ -190,6 +190,15 @@ void AnomalyEngine::LoadContractMetadata()
         Log::Warning("### WARNING: normalize_inside_graph='{}' (expected 'true'). Host will apply ImageNet normalization as fallback.", normalization);
     }
 
+    // Channel order: the graph is trained on RGB (ImageNet). OpenCV decodes BMPs
+    // as BGR, so honor preproc_color_conversion and swap channels before feeding
+    // the model. Missing key defaults to bgr2rgb (all our exporter's models).
+    const std::string colorConversion = lookupString("preproc_color_conversion");
+    m_convertBgrToRgb = colorConversion.empty() || colorConversion == "bgr2rgb";
+    Log::Info("Metadata 'preproc_color_conversion' = '{}' -> BGR2RGB swap {}.",
+        colorConversion.empty() ? "(missing, default)" : colorConversion,
+        m_convertBgrToRgb ? "ENABLED" : "disabled");
+
     // Calibration Status Verification
     const std::string calibratedStatus = lookupString("calibrated");
     if (calibratedStatus != "true") {
@@ -227,6 +236,12 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
 {
     cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
     cv::resize(rawImg, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_AREA);
+
+    // The model expects RGB (ImageNet order); OpenCV holds BGR. Swap in place so
+    // cv::split below yields planes [R, G, B] aligned with the graph and mean/std.
+    if (m_convertBgrToRgb && modelChannels == 3) {
+        cv::cvtColor(m_resizeImage, m_resizeImage, cv::COLOR_BGR2RGB);
+    }
 
     const float mean[] = { 0.485f, 0.456f, 0.406f };
     const float stddev[] = { 0.229f, 0.224f, 0.225f };
