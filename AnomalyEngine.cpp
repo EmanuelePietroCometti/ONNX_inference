@@ -3,6 +3,7 @@
 #include <xmmintrin.h> 
 #include <pmmintrin.h> 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <chrono>
 #include <string>
@@ -231,11 +232,114 @@ void AnomalyEngine::LoadContractMetadata()
         mapMin, mapMax, scoreThreshold, pixelThreshold, hasPixelThreshold, normalizationInGraph);
 }
 
+namespace {
+    // Triangle-filter (bilinear) resample coefficients for ONE axis. Mirrors
+    // inference_simulation/src/antialias_resize.py::precompute_coeffs bit-for-bit:
+    // on a downscale the filter support widens by the scale factor (antialiasing).
+    void PrecomputeCoeffs(int inSize, int outSize,
+        std::vector<int>& bounds, std::vector<double>& weights, int& ksize)
+    {
+        const double scale = static_cast<double>(inSize) / static_cast<double>(outSize);
+        const double filterscale = scale >= 1.0 ? scale : 1.0;   // widen on downscale
+        const double support = 1.0 * filterscale;                // bilinear half-width
+        const double ss = 1.0 / filterscale;
+
+        ksize = static_cast<int>(std::ceil(support)) * 2 + 1;
+        bounds.assign(outSize, 0);
+        weights.assign(static_cast<size_t>(outSize) * ksize, 0.0);
+
+        for (int o = 0; o < outSize; ++o) {
+            const double center = (o + 0.5) * scale;
+            int xmin = static_cast<int>(center - support + 0.5);
+            if (xmin < 0) xmin = 0;
+            int xmax = static_cast<int>(center + support + 0.5);
+            if (xmax > inSize) xmax = inSize;
+            const int n = xmax - xmin;
+            double total = 0.0;
+            for (int t = 0; t < n; ++t) {
+                double w = 1.0 - std::abs((xmin + t - center + 0.5) * ss);  // bilinear_filter
+                if (w < 0.0) w = 0.0;
+                weights[static_cast<size_t>(o) * ksize + t] = w;
+                total += w;
+            }
+            if (total > 0.0)
+                for (int t = 0; t < n; ++t) weights[static_cast<size_t>(o) * ksize + t] /= total;
+            bounds[o] = xmin;
+        }
+    }
+
+    inline uint8_t RoundClipU8(double v) {
+        double r = std::floor(v + 0.5);   // round half up (pixels are non-negative)
+        if (r < 0.0) r = 0.0;
+        if (r > 255.0) r = 255.0;
+        return static_cast<uint8_t>(r);
+    }
+}
+
+void AnomalyEngine::BuildResizeCoeffs(int inW, int inH)
+{
+    PrecomputeCoeffs(inW, static_cast<int>(modelWidth), m_hBounds, m_hWeights, m_hK);
+    PrecomputeCoeffs(inH, static_cast<int>(modelHeight), m_vBounds, m_vWeights, m_vK);
+    m_rsInW = inW;
+    m_rsInH = inH;
+}
+
+// Antialiased bilinear resize of a CV_8UC3 image to (modelWidth x modelHeight).
+// Separable: horizontal pass -> uint8 round/clip -> vertical pass -> uint8. Double
+// accumulation to match the Python reference exactly.
+void AnomalyEngine::ResizeAntialias(const cv::Mat& src, cv::Mat& dst)
+{
+    const int inH = src.rows, inW = src.cols;
+    const int outW = static_cast<int>(modelWidth), outH = static_cast<int>(modelHeight);
+    if (inW != m_rsInW || inH != m_rsInH) BuildResizeCoeffs(inW, inH);
+
+    // Horizontal: [inH x inW] -> [inH x outW]
+    m_hpass.create(inH, outW, CV_8UC3);
+    for (int y = 0; y < inH; ++y) {
+        const uint8_t* srow = src.ptr<uint8_t>(y);
+        uint8_t* hrow = m_hpass.ptr<uint8_t>(y);
+        for (int o = 0; o < outW; ++o) {
+            const int s = m_hBounds[o];
+            const int avail = std::min(m_hK, inW - s);
+            const double* w = &m_hWeights[static_cast<size_t>(o) * m_hK];
+            double a0 = 0.0, a1 = 0.0, a2 = 0.0;
+            for (int t = 0; t < avail; ++t) {
+                const uint8_t* px = srow + static_cast<size_t>(s + t) * 3;
+                const double wt = w[t];
+                a0 += wt * px[0]; a1 += wt * px[1]; a2 += wt * px[2];
+            }
+            uint8_t* op = hrow + static_cast<size_t>(o) * 3;
+            op[0] = RoundClipU8(a0); op[1] = RoundClipU8(a1); op[2] = RoundClipU8(a2);
+        }
+    }
+
+    // Vertical: [inH x outW] -> [outH x outW]
+    dst.create(outH, outW, CV_8UC3);
+    for (int o = 0; o < outH; ++o) {
+        const int s = m_vBounds[o];
+        const int avail = std::min(m_vK, inH - s);
+        const double* w = &m_vWeights[static_cast<size_t>(o) * m_vK];
+        uint8_t* drow = dst.ptr<uint8_t>(o);
+        for (int x = 0; x < outW; ++x) {
+            double a0 = 0.0, a1 = 0.0, a2 = 0.0;
+            for (int t = 0; t < avail; ++t) {
+                const uint8_t* px = m_hpass.ptr<uint8_t>(s + t) + static_cast<size_t>(x) * 3;
+                const double wt = w[t];
+                a0 += wt * px[0]; a1 += wt * px[1]; a2 += wt * px[2];
+            }
+            uint8_t* op = drow + static_cast<size_t>(x) * 3;
+            op[0] = RoundClipU8(a0); op[1] = RoundClipU8(a1); op[2] = RoundClipU8(a2);
+        }
+    }
+}
+
 void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height,
     uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
 {
     cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
-    cv::resize(rawImg, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_AREA);
+    // Antialiased bilinear downscale to the model size — matches training/reference
+    // (inference_simulation) exactly. cv::INTER_AREA does NOT and inflated scores.
+    ResizeAntialias(rawImg, m_resizeImage);
 
     // The model expects RGB (ImageNet order); OpenCV holds BGR. Swap in place so
     // cv::split below yields planes [R, G, B] aligned with the graph and mean/std.

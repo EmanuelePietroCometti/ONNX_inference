@@ -52,6 +52,21 @@ private:
     std::vector<cv::Mat> m_splitPlanes;
     cv::Mat m_resizeImage;
 
+    // --- Antialiased bilinear resize (host-side) ---
+    // Replaces cv::INTER_AREA, which does NOT match the training/reference resize
+    // (torchvision/PIL antialiased bilinear) and inflated every anomaly score. This
+    // is the SAME explicit separable triangle-filter algorithm as the Python
+    // reference (inference_simulation/src/antialias_resize.py) — keep the two in
+    // sync. Coefficients depend only on (src size -> model size), so they are built
+    // once and reused while the frame size is constant.
+    int m_rsInW = 0, m_rsInH = 0;              // source size the coeffs were built for
+    int m_hK = 0, m_vK = 0;                    // taps per output pixel (H / V axis)
+    std::vector<int> m_hBounds, m_vBounds;     // first source index per output pixel
+    std::vector<double> m_hWeights, m_vWeights; // [out_size * ksize] normalized weights
+    cv::Mat m_hpass;                           // intermediate [inH x modelWidth] uint8
+    void BuildResizeCoeffs(int inW, int inH);
+    void ResizeAntialias(const cv::Mat& src, cv::Mat& dst);
+
 #if defined(ORT_EP_GPU)
     // Raw CUDA device pointers for Zero-Copy GPU execution
     float* d_input = nullptr;
