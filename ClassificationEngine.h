@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IEngine.h"
+#include "Configuration.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -13,7 +14,7 @@ public:
 
     void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
     void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
-        void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus) override;
+        void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
 
 private:
     void LoadGraphContract();
@@ -60,4 +61,7 @@ private:
     std::vector<cv::Mat> m_splitPlanes;
     cv::Mat m_resizeImage;
     cv::Mat m_rgbImage;
+    cv::Mat m_bgrImage;
+
+    IniConfiguration& config;
 };

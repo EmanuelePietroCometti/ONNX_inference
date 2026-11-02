@@ -1,5 +1,6 @@
 #pragma once
 
+#include <windows.h>
 #include "RealTimeConfig.h"
 #include <string>
 #include <vector>
@@ -16,5 +17,6 @@ public:
 	virtual void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) = 0;
 
 	// Method that perform inference
-	virtual void Infer(const void* pInputImage,uint32_t width, uint32_t height, uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus) = 0;
+	virtual void Infer(const void* pInputImage,uint32_t width, uint32_t height, uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) = 0;
+	virtual float GetThreshold() const { return 0.0f; }
 };

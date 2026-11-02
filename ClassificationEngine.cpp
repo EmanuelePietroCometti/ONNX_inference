@@ -62,7 +62,7 @@ namespace {
 
 } // namespace
 
-ClassificationEngine::ClassificationEngine()
+ClassificationEngine::ClassificationEngine() : config(IniConfiguration::Instance())
 {
     env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "ClassificationEngineEnv");
     memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -217,23 +217,41 @@ void ClassificationEngine::Initialize(const std::wstring& modelPath, const RT::C
         io_binding->BindOutput(m_outConfidenceName.c_str(), m_confidenceTensor);
     }
 
-    constexpr int kWarmupRuns = 50;
     double firstMs = 0.0, lastMs = 0.0;
-    for (int r = 0; r < kWarmupRuns; ++r) {
+    for (int r = 0; r < config.GetONNXWarmUps(); ++r) {
         auto startTime = std::chrono::steady_clock::now();
         session->Run(Ort::RunOptions{ nullptr }, *io_binding);
         lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
         if (r == 0) firstMs = lastMs;
     }
-    Log::Info("Classification Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms.", kWarmupRuns, firstMs, lastMs);
+    Log::Info("Classification Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms.", config.GetONNXWarmUps(), firstMs, lastMs);
 }
 
 void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
-    void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
+    void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto)
 {
     auto t0 = std::chrono::steady_clock::now();
-    cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
-    cv::resize(rawImg, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_LINEAR);
+    int type = 0;
+    switch (channels)
+    {
+    case 1:
+      type = CV_8UC1;
+      break;
+    case 3:
+      type = CV_8UC3;
+      break;
+    default:
+      throw std::invalid_argument("OpenCV ERROR: Unsupported number of channels (" + std::to_string(channels) + "). Expected 1 or 3.");
+
+    }
+    cv::Mat rawImg(height, width, type, const_cast<void*>(pInputImage));
+
+    const cv::Mat* pSrc = &rawImg;
+    if (channels == 1) {
+      cv::cvtColor(rawImg, m_bgrImage, cv::COLOR_GRAY2BGR);
+      pSrc = &m_bgrImage;
+    }
+    cv::resize(*pSrc, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_LINEAR);
     cv::cvtColor(m_resizeImage, m_rgbImage, cv::COLOR_BGR2RGB);
 
     auto t1 = std::chrono::steady_clock::now();

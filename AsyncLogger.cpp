@@ -9,7 +9,7 @@
 
 AsyncLogger& AsyncLogger::Instance()
 {
-    static AsyncLogger instance;
+    static AsyncLogger instance(IniConfiguration::Instance());
     return instance;
 }
 
@@ -39,14 +39,52 @@ static void EnableVTProcessing()
     }
 }
 
-void AsyncLogger::Start()
+void AsyncLogger::Start(const IniConfiguration& cfg)
 {
-    bool expected = false;
-    if (!running_.compare_exchange_strong(expected, true)) {
-        return; // already started
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true))
+    return;
+
+  // Read runtime dimensions from the .ini configuration singleton
+  queue_capacity_ = std::clamp<size_t>(config.GetLoggerQueueCapacity(), 1, 1'000'000);
+  max_message_chars_ = std::clamp<size_t>(config.GetLoggerMaxMessagesChars(), 16, 4096);
+
+  // Allocate ring slots and contiguous character pool ONCE at startup
+  ring_ = std::make_unique<Slot[]>(queue_capacity_);
+  text_pool_ = std::make_unique<char[]>(queue_capacity_ * max_message_chars_);
+
+  for (size_t i = 0; i < queue_capacity_; ++i)
+  {
+    ring_[i].text = &text_pool_[i * max_message_chars_];
+    ring_[i].length = 0;
+  }
+
+  head_ = tail_ = count_ = 0;
+  consumer_ = std::thread(&AsyncLogger::ConsumerLoop, this);
+}
+
+void AsyncLogger::Enqueue(LogLevel level, const char* msg, uint16_t length)
+{
+  SYSTEMTIME now;
+  GetLocalTime(&now);
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (count_ == queue_capacity_)
+    {
+      dropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
     }
-    EnableVTProcessing();
-    consumer_ = std::thread(&AsyncLogger::ConsumerLoop, this);
+
+    Slot& slot = ring_[head_];
+    slot.ts = now;
+    slot.level = level;
+    slot.length = length;
+    std::memcpy(slot.text, msg, length);
+
+    head_ = (head_ + 1) % queue_capacity_;
+    ++count_;
+  }
 }
 
 void AsyncLogger::Shutdown()
@@ -64,42 +102,10 @@ void AsyncLogger::Shutdown()
     std::fflush(stdout);
 }
 
-void AsyncLogger::Enqueue(LogLevel level, const char* msg, uint16_t length)
-{
-    // Timestamp taken at enqueue time so the printed time reflects the event,
-    // not the flush. GetLocalTime reads shared kernel memory: no syscall cost.
-    SYSTEMTIME ts;
-    GetLocalTime(&ts);
-
-    bool shouldNotify = false;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (count_ == kQueueCapacity) {
-            // Queue full: drop instead of blocking the real-time producer
-            dropped_.fetch_add(1, std::memory_order_relaxed);
-            return;
-        }
-        Slot& slot = ring_[head_];
-        slot.ts = ts;
-        slot.level = level;
-        slot.length = length;
-        std::memcpy(slot.text, msg, length);
-
-        head_ = (head_ + 1) % kQueueCapacity;
-        ++count_;
-
-        // Wake the consumer early only when the queue is filling up or the
-        // message is an error; routine traffic waits for the periodic flush
-        shouldNotify = (count_ >= kNotifyThreshold) || (level == LogLevel::Error);
-    }
-    if (shouldNotify) {
-        cv_.notify_one();
-    }
-}
-
 size_t AsyncLogger::DrainQueue()
 {
     size_t printed = 0;
+    const WORD verbosity = config.GetLoggerVerbosity();
     for (;;) {
         Slot local;
         {
@@ -108,9 +114,12 @@ size_t AsyncLogger::DrainQueue()
             // Copy ONE slot out under the lock (~half a microsecond), then
             // print with the lock released so producers are never stalled by I/O
             local = ring_[tail_];
-            tail_ = (tail_ + 1) % kQueueCapacity;
+            tail_ = (tail_ + 1) % config.GetLoggerQueueCapacity();
             --count_;
         }
+
+        if (static_cast<WORD>(local.level) < verbosity)
+          continue;
 
         const fmt::string_view text(local.text, local.length);
         switch (local.level) {
@@ -152,8 +161,8 @@ void AsyncLogger::ConsumerLoop()
     while (running_.load(std::memory_order_relaxed)) {
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait_for(lock, std::chrono::milliseconds(kFlushIntervalMs),
-                [this] { return count_ >= kNotifyThreshold || !running_.load(std::memory_order_relaxed); });
+            cv_.wait_for(lock, std::chrono::milliseconds(config.GetLoggerFlushIntervalMs()),
+                [this] { return count_ >= config.GetLoggerNotifyThreshold() || !running_.load(std::memory_order_relaxed); });
         }
         DrainQueue();
     }

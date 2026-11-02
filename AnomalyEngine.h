@@ -1,5 +1,6 @@
 #pragma once
 #include "IEngine.h"
+#include "Configuration.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -18,15 +19,14 @@ public:
 
     void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
 
-    void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
-        void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus) override;
-
+    void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
+    float GetThreshold() const override { return scoreThreshold; }
 private:
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> session;
     Ort::MemoryInfo memoryInfo{ nullptr };
 
-    // --- I/O Binding Variables ---
+    // I/O Binding Variables
     std::unique_ptr<Ort::IoBinding> io_binding;
     bool m_useGpuIoBinding = false; // Resolved at runtime
 
@@ -52,7 +52,7 @@ private:
     std::vector<cv::Mat> m_splitPlanes;
     cv::Mat m_resizeImage;
 
-    // --- Antialiased bilinear resize (host-side) ---
+    // Antialiased bilinear resize (host-side)
     // Replaces cv::INTER_AREA, which does NOT match the training/reference resize
     // (torchvision/PIL antialiased bilinear) and inflated every anomaly score. This
     // is the SAME explicit separable triangle-filter algorithm as the Python
@@ -83,6 +83,7 @@ private:
     cv::Mat m_colorHeat;
     cv::Mat m_overlay;
     cv::Mat m_maskFull;
+    cv::Mat m_bgrImage;
 
     std::string exportContract;
     bool normalizationInGraph = false;
@@ -98,6 +99,7 @@ private:
     double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
     double maxRun = 0;
     int frameCount = 0;
+    IniConfiguration& config;
 
     void LoadContractMetadata();
 };

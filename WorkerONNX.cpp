@@ -9,6 +9,8 @@
 #include <vector>
 #include <cstdint>
 
+
+
 WorkerONNX::WorkerONNX(PTcontrolPoint pPoint, unsigned workerIndex, unsigned workerCount) :
 	controlPointData(pPoint),
 	workerIndex(workerIndex),
@@ -21,19 +23,21 @@ WorkerONNX::WorkerONNX(PTcontrolPoint pPoint, unsigned workerIndex, unsigned wor
 	hMMFResImage(NULL),
 	pResImageBuffer(NULL)
 {
-	InitializeLocalPC();
+	try 
+	{
+		InitializeLocalPC();
+	}
+	catch (...)
+	{
+		ReleaseResources();
+		throw;
+	}
 }
 
 WorkerONNX::~WorkerONNX()
 {
 	Stop();
-	if (pImageBuffer) UnmapViewOfFile(pImageBuffer);
-	if (pResImageBuffer) UnmapViewOfFile(pResImageBuffer);
-	if (hMMFImage) CloseHandle(hMMFImage);
-	if (hLocalMutex) CloseHandle(hLocalMutex);
-	if (hEventReady) CloseHandle(hEventReady);
-	if (hEventResults) CloseHandle(hEventResults);
-	if (hMMFResImage) CloseHandle(hMMFResImage);
+	ReleaseResources();
 }
 
 void WorkerONNX::Start()
@@ -83,6 +87,45 @@ void WorkerONNX::MarkAsError()
 	}
 }
 
+void WorkerONNX::ReleaseResources()
+{
+	if (pImageBuffer) 
+	{ 
+		UnmapViewOfFile(pImageBuffer);    
+		pImageBuffer = NULL; 
+	}
+	if (pResImageBuffer) 
+	{ 
+		UnmapViewOfFile(pResImageBuffer); 
+		pResImageBuffer = NULL; 
+	}
+	if (hMMFImage) 
+	{ 
+		CloseHandle(hMMFImage);           
+		hMMFImage = NULL; 
+	}
+	if (hMMFResImage) 
+	{ 
+		CloseHandle(hMMFResImage);        
+		hMMFResImage = NULL; 
+	}
+	if (hLocalMutex) 
+	{ 
+		CloseHandle(hLocalMutex);         
+		hLocalMutex = NULL; 
+	}
+	if (hEventReady) 
+	{ 
+		CloseHandle(hEventReady);         
+		hEventReady = NULL; 
+	}
+	if (hEventResults) 
+	{ 
+		CloseHandle(hEventResults);       
+		hEventResults = NULL; 
+	}
+}
+
 void WorkerONNX::InferenceLoop()
 {
 	// TIME_CRITICAL priority + first core of this worker's slice: the worker
@@ -92,11 +135,11 @@ void WorkerONNX::InferenceLoop()
 
 	Log::Info(">> Worker thread started for control point: {}", controlPointData->idPunto);
 	bool shouldQuit = false;
-	uint32_t frameCounter = 0; // Local counter for throttling logs
 
 	// Reused across frames: statusStr keeps its heap capacity after the first
 	// frame, so the steady-state loop performs no allocations at all
 	std::string statusStr;
+	const float modelThreshold = aiEngine ? aiEngine->GetThreshold() : 0.0f;
 
 	while (!shouldQuit) {
 		bool inferenceError = false;
@@ -132,7 +175,8 @@ void WorkerONNX::InferenceLoop()
 						controlPointData->bpp / 8,
 						pRawHeatmap,
 						anomalyScore,
-						statusStr);
+						statusStr,
+						controlPointData->idPunto);
 				}
 				else {
 					// Engine or shared buffers missing: the frame cannot be
@@ -145,6 +189,8 @@ void WorkerONNX::InferenceLoop()
 				Log::Error("### AI INFERENCE EXCEPTION ON CP {}: {}", controlPointData->idPunto, e.what());
 				inferenceError = true;
 			}
+			const double inferMs = std::chrono::duration<double, std::milli>(
+				std::chrono::steady_clock::now() - inferStart).count();
 
 			// On error, force the published values to the error sentinel BEFORE
 			// building the JSON. Infer() may throw AFTER it already wrote
@@ -157,9 +203,6 @@ void WorkerONNX::InferenceLoop()
 				anomalyScore = 0.0f;
 			}
 
-			const double inferMs = std::chrono::duration<double, std::milli>(
-				std::chrono::steady_clock::now() - inferStart).count();
-
 			// The result JSON has a fixed schema: build it with fmt straight
 			// onto the stack. No nlohmann DOM, no heap allocation, no wstring
 			// temporary — the hot path only formats and copies
@@ -167,8 +210,7 @@ void WorkerONNX::InferenceLoop()
 			size_t jsonLen = 0;
 
 			if (controlPointData->inferenceType == InferenceType::ANOMALY) {
-				const auto out = fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1,
-					R"({{"anomaly_score":{:.6f},"status":"{}"}})", anomalyScore, statusStr);
+				const auto out = fmt::format_to_n(jsonBuf, sizeof(jsonBuf) - 1, R"({{"anomaly_score":{:.6f},"threshold":{:.6f},"status":"{}"}})", anomalyScore, modelThreshold, statusStr);
 				jsonLen = out.size;
 			}
 			else if (controlPointData->inferenceType == InferenceType::CLASSIFICATION) {
@@ -209,16 +251,8 @@ void WorkerONNX::InferenceLoop()
 				// Signal the producer immediately that data is ready
 				SetEvent(hEventResults);
 			}
-
-			// Throttled telemetry: even this enqueue is allocation-free, the
-			// AsyncLogger consumer does the console I/O on core 0
-			frameCounter++;
-			/*
-			if (frameCounter % 100 == 0) {
-				Log::Info("Worker {} | infer {:.1f} ms | {}", controlPointData->idPunto,
+			Log::Info("Worker {} | infer {:.1f} ms | {}", controlPointData->idPunto,
 					inferMs, fmt::string_view(jsonBuf, jsonLen));
-			}
-			*/
 		}
 	}
 	Log::Info(">> Worker thread stopped for control point: {}", controlPointData->idPunto);
@@ -226,16 +260,35 @@ void WorkerONNX::InferenceLoop()
 
 void WorkerONNX::InitializeLocalPC()
 {
+	if (controlPointData->bpp != 8 && controlPointData->bpp != 24)
+	{
+		controlPointData->status = PointState::ERROR_DETECTED;
+		Log::Error("### ERROR: invalid bpp value {}", controlPointData->bpp);
+		throw std::runtime_error("Invalid bpp value!");
+	}
+
+	if (controlPointData->sizeX == 0 || controlPointData->sizeY == 0)
+	{
+		controlPointData->status = PointState::ERROR_DETECTED;
+		Log::Error("### ERROR: invalid size value ({}x{})", controlPointData->sizeX, controlPointData->sizeY);
+		throw std::runtime_error("Invalid size value!");
+	}
+
 	// Keep local handles 
-	hLocalMutex = OpenMutex(MUTEX_ALL_ACCESS, FALSE, controlPointData->mutexName);
-	hEventReady = OpenEvent(EVENT_ALL_ACCESS, FALSE, controlPointData->eventReadyName);
-	hEventResults = OpenEvent(EVENT_ALL_ACCESS, FALSE, controlPointData->resultsEventName);
+	hLocalMutex = OpenMutexW(MUTEX_ALL_ACCESS, FALSE, controlPointData->mutexName);
+	hEventReady = OpenEventW(EVENT_ALL_ACCESS, FALSE, controlPointData->eventReadyName);
+	hEventResults = OpenEventW(EVENT_ALL_ACCESS, FALSE, controlPointData->resultsEventName);
+	if (hLocalMutex == NULL || hEventReady == NULL || hEventResults == NULL)
+	{
+		Log::Error("### ERROR: point objects not found (error {})", GetLastError());
+		throw std::runtime_error("Point mutex/events not available!");
+	}
 
 	// Map image buffer for this point
 	int nPayload = controlPointData->sizeX * controlPointData->sizeY * controlPointData->bpp / 8;
-	std::wstring mmfName = fmt::format(L"MMF_{}_IMAGE", controlPointData->idPunto);
+	std::wstring mmfName = fmt::format(IPC_NAME_PREFIX L"MMF_{}_IMAGE", controlPointData->idPunto);
 
-	hMMFImage = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, nPayload, mmfName.c_str());
+	hMMFImage = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, nPayload, mmfName.c_str());
 	if (hMMFImage == NULL) {
 		throw std::runtime_error("Failed to create or open the image MMF!");
 	}
@@ -250,14 +303,14 @@ void WorkerONNX::InitializeLocalPC()
 	}
 
 
-	std::wstring mmfResName = fmt::format(L"MMF_{}_RESIMAGE", controlPointData->idPunto);
-
-	hMMFResImage = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, nPayload, mmfResName.c_str());
+	std::wstring mmfResName = fmt::format(IPC_NAME_PREFIX L"MMF_{}_RESIMAGE", controlPointData->idPunto);
+	const size_t nResPayload = (size_t)controlPointData->sizeX * controlPointData->sizeY;   // anomaly map 8 bit
+	hMMFResImage = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, nResPayload, mmfResName.c_str());
 	if (hMMFResImage == NULL) {
 		throw std::runtime_error("Failed to create or open the image MMF!");
 	}
 
-	pResImageBuffer = MapViewOfFile(hMMFResImage, FILE_MAP_WRITE, 0, 0, nPayload);
+	pResImageBuffer = MapViewOfFile(hMMFResImage, FILE_MAP_WRITE, 0, 0, nResPayload);
 	if (pResImageBuffer == NULL) {
 		DWORD dwErr = GetLastError();
 		CloseHandle(hMMFResImage);
@@ -265,8 +318,6 @@ void WorkerONNX::InitializeLocalPC()
 		Log::Error("### ERROR: MapViewOfFile failed with code: {}", dwErr);
 		throw std::runtime_error("MapViewOfFile failed!");
 	}
-
-
 
 	switch (controlPointData->inferenceType) {
 	case InferenceType::ANOMALY:

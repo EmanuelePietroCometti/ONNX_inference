@@ -23,6 +23,7 @@ public:
 	void MarkAsConfigured();
 	void MarkAsError();
 private:
+	void ReleaseResources();
 	std::unique_ptr<IEngine> aiEngine;
 	// HANDLE for the local mutex and event
 	PTcontrolPoint controlPointData;

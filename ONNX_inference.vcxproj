@@ -41,56 +41,59 @@
     <RootNamespace>ONNXinference</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
+  <PropertyGroup Label="UserMacro">
+    <ComputeCapability>86</ComputeCapability>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug-OpenVINO|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-OpenVINO|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug-CPU|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-CPU|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
@@ -101,58 +104,42 @@
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug-OpenVINO|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release-OpenVINO|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug-CPU|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release-CPU|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="CustomMacros.props" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-  <!-- Selezione del runtime ONNX in base alla configurazione:
-       Debug/Release          -> pacchetto GPU (TensorRT/CUDA)
-       *-OpenVINO             -> pacchetto ottimizzato OpenVINO (Intel CPU/iGPU/NPU)
-       *-CPU                  -> pacchetto CPU standard (CPU Execution Provider) -->
-  <PropertyGroup Label="SdkPaths">
-    <SdkRoot>$(ProjectDir)SDK\</SdkRoot>
-    <FmtDir>$(SdkRoot)fmt-11.1.4</FmtDir>
-    <OpenCVDir>$(SdkRoot)opencv\build</OpenCVDir>
-    <JsonDir>$(SdkRoot)nlohmann_json</JsonDir>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Release'">
-    <OrtDir>$(SdkRoot)onnxruntime-win-x64-gpu-1.24.4</OrtDir>
-    <OrtEpDefine>ORT_EP_GPU</OrtEpDefine>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Release-OpenVINO'">
-    <OrtDir>$(SdkRoot)onnxruntime_openvino</OrtDir>
-    <OrtEpDefine>ORT_EP_OPENVINO</OrtEpDefine>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)'=='Debug-CPU' or '$(Configuration)'=='Release-CPU'">
-    <OrtDir>$(SdkRoot)onnxruntime-win-x64-1.24.4</OrtDir>
-    <OrtEpDefine>ORT_EP_CPU</OrtEpDefine>
-  </PropertyGroup>
-  <!-- Nome libreria OpenCV: suffisso 'd' solo per build Debug -->
-  <PropertyGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Debug-CPU'">
-    <OpenCVLibName>opencv_world4120d</OpenCVLibName>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO' or '$(Configuration)'=='Release-CPU'">
-    <OpenCVLibName>opencv_world4120</OpenCVLibName>
-  </PropertyGroup>
+  <!-- Runtime ONNX scelto in base alla configurazione (define ORT_EP_* e cartella SDK):
+       Debug/Release     -> ORT_EP_GPU      (TensorRT/CUDA)
+       *-OpenVINO        -> ORT_EP_OPENVINO (Intel CPU/iGPU/NPU)
+       *-CPU             -> ORT_EP_CPU      (CPU Execution Provider)
+       Il suffisso 'd' di OpenCV vale solo per le build Debug. -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -179,62 +166,185 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Debug-OpenVINO' or '$(Configuration)'=='Debug-CPU')">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>ORT_EP_GPU;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120d.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120d.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_builder_resource_$(ComputeCapability)_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_dispatch_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_lean_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_plugin_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_vc_plugin_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvonnxparser_10.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug-OpenVINO|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>ORT_EP_OPENVINO;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\onnxruntime_openvino\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime_openvino\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120d.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime_openvino\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120d.dll" "$(OutDir)"
 xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll" "$(OutDir)"
 xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
 xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
-xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"</Command>
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Release' or '$(Configuration)'=='Release-OpenVINO' or '$(Configuration)'=='Release-CPU')">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug-CPU|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>ORT_EP_CPU;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include;$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120d.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120d.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>$(OrtEpDefine);FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>ORT_EP_GPU;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(FmtDir)\include;$(OrtDir)\include;$(OpenCVDir)\include;$(JsonDir)\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include;$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\include</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(OrtDir)\lib;$(OpenCVDir)\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>onnxruntime.lib;$(OpenCVLibName).lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>xcopy /Y /D "$(OrtDir)\lib\*.dll" "$(OutDir)"
-xcopy /Y /D "$(OpenCVDir)\x64\vc16\bin\$(OpenCVLibName).dll" "$(OutDir)"
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime-win-x64-gpu-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_builder_resource_$(ComputeCapability)_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_dispatch_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_lean_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_plugin_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvinfer_vc_plugin_10.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\nvonnxparser_10.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release-OpenVINO|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>ORT_EP_OPENVINO;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\onnxruntime_openvino\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime_openvino\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime_openvino\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120.dll" "$(OutDir)"
 xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll" "$(OutDir)"
 xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
 xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
-xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"</Command>
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release-CPU|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>ORT_EP_CPU;FMT_HEADER_ONLY;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)SDK\fmt-11.1.4\include;$(ProjectDir)SDK\opencv\build\include;$(ProjectDir)SDK\nlohmann_json\include;$(ProjectDir)SDK\TensorRT-10.16.1.11\include;$(CUDA_PATH)\include;$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\include</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\lib;$(ProjectDir)SDK\opencv\build\x64\vc16\lib;$(ProjectDir)SDK\TensorRT-10.16.1.11\lib;$(CUDA_PATH)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>onnxruntime.lib;opencv_world4120.lib;nvinfer_10.lib;nvinfer_plugin_10.lib;nvonnxparser_10.lib;cudart.lib;cuda.lib;cublas.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)SDK\onnxruntime-win-x64-1.24.4\lib\*.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\opencv\build\x64\vc16\bin\opencv_world4120.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)SDK\TensorRT-10.16.1.11\bin\*.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublas64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cublasLt64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"
+xcopy /Y /D "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AnomalyEngine.cpp" />
     <ClCompile Include="AsyncLogger.cpp" />
     <ClCompile Include="ClassificationEngine.cpp" />
+    <ClCompile Include="Configuration.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ManagerONNX.cpp" />
     <ClCompile Include="OrtsessionConfig.cpp" />
@@ -245,11 +355,13 @@ xcopy /Y /D "$(CUDA_PATH)\bin\x64\cudart64_13.dll" "$(OutDir)"</Command>
     <ClInclude Include="AnomalyEngine.h" />
     <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="ClassificationEngine.h" />
+    <ClInclude Include="Configuration.h" />
     <ClInclude Include="IEngine.h" />
     <ClInclude Include="IPC_Shared.h" />
     <ClInclude Include="ManagerONNX.h" />
     <ClInclude Include="OrtsessionConfig.h" />
     <ClInclude Include="RealTimeConfig.h" />
+    <ClInclude Include="SimpleIni.h" />
     <ClInclude Include="WorkerONNX.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -24,6 +24,8 @@
 
 namespace {
 
+  IniConfiguration& config = IniConfiguration::Instance();
+
 // Custom thread factory for the ORT intra-op pool.
 //
 // CRITICAL for the real-time budget: on the CPU EP the convolutions run on the
@@ -64,6 +66,39 @@ void OrtRtJoinThread(OrtCustomThreadHandle handle)
     CloseHandle(h);
 }
 
+// Directory of the running executable, computed once (thread-safe since C++11).
+// Used to anchor cache paths: std::filesystem::absolute() would resolve them
+// against the CWD of the first call instead.
+const std::filesystem::path& ExeDir()
+{
+  static const std::filesystem::path dir = [] {
+    wchar_t buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    return (n > 0 && n < MAX_PATH)
+      ? std::filesystem::path(buf).parent_path()
+      : std::filesystem::current_path();   // fallback
+    }();
+  return dir;
+}
+
+// IniConfiguration exposes WCHAR*, ORT option values are narrow UTF-8 strings.
+std::string WideToUtf8(const WCHAR* w)
+{
+  if (w == nullptr || *w == L'\0') return {};
+  const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+  if (n <= 1) return {};
+  std::string s(static_cast<size_t>(n - 1), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+  return s;
+}
+
+// Relative (or empty) paths are anchored to the exe directory, not the CWD.
+[[maybe_unused]] std::string ResolveFromExeDir(const std::string& p, const char* fallbackName)
+{
+  const std::filesystem::path path(p.empty() ? std::string(fallbackName) : p);
+  return (path.is_absolute() ? path : ExeDir() / path).string();
+}
+
 } // namespace
 
 // Configures execution providers + session options for one session.
@@ -75,6 +110,9 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
     const RT::CpuPartition& cpuPartition)
 {
     bool hardwareAccelerated = false;
+
+    // Singleton used to load and use configuration from ini
+    [[maybe_unused]] const IniConfiguration& ini = IniConfiguration::Instance();
 
     // Threads available to THIS session: its core slice when partitioned,
     // otherwise all usable physical cores minus the reserved one. The real
@@ -99,14 +137,6 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
 
     const OrtApi& api = Ort::GetApi();
 
-    // Absolute cache paths. Relative paths ("./trt_cache") break the moment the
-    // working directory differs from the exe directory (service, launcher, or a
-    // caller that changed CWD), silently disabling the cache.
-    static const std::string engineCache =
-        std::filesystem::absolute("trt_engine_cache").string();
-    static const std::string timingCache =
-        std::filesystem::absolute("trt_timing_cache").string();
-
     // TensorRT
     try {
         OrtTensorRTProviderOptionsV2* trt = nullptr;
@@ -115,6 +145,13 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
             trtGuard(trt, [](OrtTensorRTProviderOptionsV2* p) {
             Ort::GetApi().ReleaseTensorRTProviderOptions(p);
                 });
+
+        const std::string deviceId = std::to_string(ini.GetGeneralConfigurationGpuDevice());
+        const std::string fp16 = ini.GetTensorRTFP16() ? "1" : "0";           // FP16 kernels: big speedup on modern GPUs
+        const std::string cacheOn = ini.GetTensorRTCacheEnable() ? "1" : "0";    // reuse engine + kernel-timing results across runs
+        const std::string optLevel = std::to_string(ini.GetTensorRTOptimizationLevel()); // 5 = most aggressive builder search
+        const std::string engineCache = ResolveFromExeDir(WideToUtf8(ini.GetTensorRTEngineCache()), "trt_engine_cache");
+        const std::string timingCache = ResolveFromExeDir(WideToUtf8(ini.GetTensorRTTimingCache()), "trt_timing_cache");
 
         const char* keys[] = {
             "device_id",
@@ -126,7 +163,8 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
             "trt_builder_optimization_level"  // 5 = most aggressive builder search (slower build, faster engine)
         };
         const char* values[] = {
-            "0", "1", "1", engineCache.c_str(), "1", timingCache.c_str(), "5"
+            deviceId.c_str(), fp16.c_str(), cacheOn.c_str(), engineCache.c_str(),
+            cacheOn.c_str(), timingCache.c_str(), optLevel.c_str()
         };
         Ort::ThrowOnError(api.UpdateTensorRTProviderOptions(
             trt, keys, values, sizeof(keys) / sizeof(keys[0])));
@@ -148,8 +186,11 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
             Ort::GetApi().ReleaseCUDAProviderOptions(p);
                 });
 
+        const std::string cudaDevice = std::to_string(ini.GetGeneralConfigurationGpuDevice());
+        const std::string cudnn_conv_use_max_workspace = std::to_string(ini.GetCudaConvUseMaxWorkspace());
+
         const char* keys[] = { "device_id", "cudnn_conv_use_max_workspace" };
-        const char* values[] = { "0", "1" };  // let cuDNN pick the fastest conv algo
+        const char* values[] = { cudaDevice.c_str(), cudnn_conv_use_max_workspace.c_str() };  // let cuDNN pick the fastest conv algo
         Ort::ThrowOnError(api.UpdateCUDAProviderOptions(
             cuda, keys, values, sizeof(keys) / sizeof(keys[0])));
 
@@ -168,14 +209,17 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
     so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
 
     // Define active targets dynamically to adjust based on the selected backend
-    std::string targetDevice = "GPU";
-    std::string targetPrecision = "FP16"; // Critical Optimization: Intel UHD GPUs process FP16 natively and much faster than FP32
+    std::string targetDevice = WideToUtf8(ini.GetOpenVINOTargetDevice());
+    std::string targetPrecision = WideToUtf8(ini.GetOpenVINOTargetPrecision());
+    if (targetDevice.empty())    targetDevice = "CPU";
+    if (targetPrecision.empty()) targetPrecision = "FP32";
+    const std::string numStreams = std::to_string(ini.GetOpenVINONumStreams());
 
     try {
         std::unordered_map<std::string, std::string> ov;
         ov["device_type"] = targetDevice;
         ov["precision"] = targetPrecision;
-        ov["num_streams"] = "1"; // Single stream to minimize single-frame latency
+        ov["num_streams"] = numStreams; // Single stream to minimize single-frame latency
 
         // Thread limits apply if OpenVINO offloads certain operators to the CPU
         ov["num_of_threads"] = std::to_string(sliceThreads);
@@ -222,7 +266,7 @@ bool ConfigureOrtSessionOptions(Ort::SessionOptions& so, const std::string& tag,
 #error "No execution provider selected: define one of ORT_EP_GPU, ORT_EP_OPENVINO or ORT_EP_CPU."
 #endif
 
-    // ---- Threading + numeric policy, driven by whether an accelerator loaded ----
+    // hreading + numeric policy, driven by whether an accelerator loaded
     if (hardwareAccelerated) {
         // The accelerator runs the heavy compute on its own threads/streams;
         // a single ORT intra-op thread just feeds it and avoids context switching.

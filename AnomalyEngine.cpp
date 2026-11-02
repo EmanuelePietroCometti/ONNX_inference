@@ -17,7 +17,7 @@
 #include <cuda_runtime.h>
 #endif
 
-AnomalyEngine::AnomalyEngine()
+AnomalyEngine::AnomalyEngine() : config(IniConfiguration::Instance())
 {
     env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "AnomalyEngineEnv");
     memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -53,7 +53,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
             outputNames.emplace_back(session->GetOutputNameAllocated(idx, allocator).get());
         }
 
-        // --- Extrapolate Output Indices BEFORE allocation ---
+        // Extrapolate output indices BEFORE allocation
         for (size_t idx = 0; idx < session->GetOutputCount(); ++idx) {
             auto shape = session->GetOutputTypeInfo(idx).GetTensorTypeAndShapeInfo().GetShape();
             if (shape.size() == 1 || (shape.size() == 2 && shape[1] == 1)) {
@@ -65,7 +65,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
         }
         if (scoreIdx < 0) throw std::runtime_error("Anomaly model missing scalar score output.");
 
-        // --- Geometry Extrapolation & Sanitization ---
+        // Geometry extrapolation & sanitization
         Ort::TypeInfo typeInfo = session->GetInputTypeInfo(0);
         inputShape = typeInfo.GetTensorTypeAndShapeInfo().GetShape();
         if (inputShape[0] == -1) inputShape[0] = 1;
@@ -82,7 +82,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
             for (auto& d : m_mapShape) if (d < 0) d = 1;
         }
 
-        // --- Calculate Buffer Sizes ---
+        // Calculate buffer sizes
         size_t inputElements = 1;
         for (int64_t d : inputShape) inputElements *= d;
 
@@ -97,7 +97,7 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
         m_hostScore.assign(1, 0.0f);
         if (mapIdx >= 0) m_hostMap.assign(mapElements, 0.0f);
 
-        // --- Setup I/O Binding ---
+        // Setup I/O binding
         io_binding = std::make_unique<Ort::IoBinding>(*session);
 
 #if defined(ORT_EP_GPU)
@@ -138,17 +138,16 @@ void AnomalyEngine::Initialize(const std::wstring& modelPath, const RT::CpuParti
             Log::Info("CPU I/O Binding established with System RAM mapping.");
         }
 
-        // --- Warmup Runs ---
-        constexpr int kWarmupRuns = 50;
+        // Warmup runs
         double firstMs = 0.0, lastMs = 0.0;
-        for (int r = 0; r < kWarmupRuns; ++r) {
+        for (int r = 0; r < config.GetONNXWarmUps(); ++r) {
             auto startTime = std::chrono::steady_clock::now();
             session->Run(Ort::RunOptions{ nullptr }, *io_binding);
             lastMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - startTime).count();
             if (r == 0) firstMs = lastMs;
         }
 
-        Log::Info("Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms. Engine locked.", kWarmupRuns, firstMs, lastMs);
+        Log::Info("Warmup completed: {} runs, first {:.1f} ms, last {:.1f} ms. Engine locked.", config.GetONNXWarmUps(), firstMs, lastMs);
     }
     catch (const Ort::Exception& e) {
         Log::Error("### ERROR DURING INITIALIZATION: {}", e.what());
@@ -195,10 +194,8 @@ void AnomalyEngine::LoadContractMetadata()
     // as BGR, so honor preproc_color_conversion and swap channels before feeding
     // the model. Missing key defaults to bgr2rgb (all our exporter's models).
     const std::string colorConversion = lookupString("preproc_color_conversion");
-    m_convertBgrToRgb = colorConversion.empty() || colorConversion == "bgr2rgb";
-    Log::Info("Metadata 'preproc_color_conversion' = '{}' -> BGR2RGB swap {}.",
-        colorConversion.empty() ? "(missing, default)" : colorConversion,
-        m_convertBgrToRgb ? "ENABLED" : "disabled");
+    m_convertBgrToRgb = (colorConversion == "bgr2rgb");
+    Log::Info("Metadata 'preproc_color_conversion' = '{}' -> BGR2RGB swap {}.", colorConversion.empty() ? "(missing, default)" : colorConversion, m_convertBgrToRgb ? "ENABLED" : "disabled");
 
     // Calibration Status Verification
     const std::string calibratedStatus = lookupString("calibrated");
@@ -334,12 +331,29 @@ void AnomalyEngine::ResizeAntialias(const cv::Mat& src, cv::Mat& dst)
 }
 
 void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t height,
-    uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus)
+    uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto)
 {
-    cv::Mat rawImg(height, width, CV_8UC3, const_cast<void*>(pInputImage));
+    int type = 0;
+    switch (channels)
+    {
+    case 1:
+      type = CV_8UC1;
+      break;
+    case 3:
+      type = CV_8UC3;
+      break;
+    default:
+      throw std::invalid_argument("OpenCV ERROR: Unsupported number of channels (" + std::to_string(channels) + "). Expected 1 or 3.");
+    }
+    cv::Mat rawImg(height, width, type, const_cast<void*>(pInputImage));
     // Antialiased bilinear downscale to the model size — matches training/reference
     // (inference_simulation) exactly. cv::INTER_AREA does NOT and inflated scores.
-    ResizeAntialias(rawImg, m_resizeImage);
+    const cv::Mat* pSrc = &rawImg;
+    if (channels == 1) {
+      cv::cvtColor(rawImg, m_bgrImage, cv::COLOR_GRAY2BGR);
+      pSrc = &m_bgrImage;
+    }
+    ResizeAntialias(*pSrc, m_resizeImage);
 
     // The model expects RGB (ImageNet order); OpenCV holds BGR. Swap in place so
     // cv::split below yields planes [R, G, B] aligned with the graph and mean/std.
@@ -357,8 +371,7 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
         const float offset = normalizationInGraph ? 0.0f : (mean[c] / stddev[c]);
 
         // Write processed data directly into host buffer
-        cv::Mat planeF32(static_cast<int>(modelHeight), static_cast<int>(modelWidth), CV_32FC1,
-            inputTensorValues.data() + static_cast<size_t>(c) * planeSize);
+        cv::Mat planeF32(static_cast<int>(modelHeight), static_cast<int>(modelWidth), CV_32FC1, inputTensorValues.data() + static_cast<size_t>(c) * planeSize);
         m_splitPlanes[c].convertTo(planeF32, CV_32FC1, scale, -offset);
     }
 
@@ -388,27 +401,16 @@ void AnomalyEngine::Infer(const void* pInputImage, uint32_t width, uint32_t heig
     outStatus = (rawScore >= scoreThreshold) ? "REJECT" : "OK";
 
     if (writeHeatmap && pOutputHeatmap && mapIdx >= 0) {
-        // Point OpenCV directly to our bound host map buffer
-        cv::Mat floatHeatmap(static_cast<int>(m_mapShape[2]), static_cast<int>(m_mapShape[3]), CV_32FC1, m_hostMap.data());
+      // raw anomaly map, casted to 8 bit with calibration values
+      cv::Mat floatHeatmap(static_cast<int>(m_mapShape[2]), static_cast<int>(m_mapShape[3]), CV_32FC1, m_hostMap.data());
 
-        // Linear MinMax scaling logic implemented directly for OpenCV scaling
-        const double alpha = 255.0 / (mapMax - mapMin);
-        const double beta = -255.0 * mapMin / (mapMax - mapMin);
-        floatHeatmap.convertTo(m_uint8Heatmap, CV_8UC1, alpha, beta);
+      const double alpha = 255.0 / (mapMax - mapMin);
+      const double beta = -255.0 * mapMin / (mapMax - mapMin);
+      floatHeatmap.convertTo(m_uint8Heatmap, CV_8UC1, alpha, beta);
 
-        cv::resize(m_uint8Heatmap, m_largeHeatmap, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+      // output with the same dimension od the ROI
+      cv::resize(m_uint8Heatmap, m_largeHeatmap, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
 
-        // Native OpenCV Colormap application (replaces legacy custom RGB LUT)
-        cv::applyColorMap(m_largeHeatmap, m_colorHeat, cv::COLORMAP_JET);
-        cv::addWeighted(rawImg, 1.0 - m_blendAlpha, m_colorHeat, m_blendAlpha, 0.0, m_overlay);
-
-        if (hasPixelThreshold) {
-            cv::Mat maskModel = floatHeatmap >= pixelThreshold;
-            cv::resize(maskModel, m_maskFull, cv::Size(width, height), 0, 0, cv::INTER_NEAREST);
-            std::vector<std::vector<cv::Point>> contours;
-            cv::findContours(m_maskFull, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-            cv::drawContours(m_overlay, contours, -1, cv::Scalar(255, 0, 0), 2);
-        }
-        memcpy(pOutputHeatmap, m_overlay.data, static_cast<size_t>(width) * height * channels);
+      memcpy(pOutputHeatmap, m_largeHeatmap.data, static_cast<size_t>(width) * height);
     }
 }

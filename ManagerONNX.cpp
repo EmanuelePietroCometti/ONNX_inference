@@ -1,13 +1,44 @@
 #include "ManagerONNX.h"
 #include "AsyncLogger.h"
 #include <stdexcept>
+#include <string>
 
-ManagerONNX::ManagerONNX() : hMapFile(NULL), pSharedList(NULL), hGlobalMutex(NULL), hEventTrigger(NULL), hEventAck(NULL)
+// Writes the reason of a configuration failure into the result JSON of the slot, so the
+// external program can show why the point was not configured. The text is reduced to
+// printable ASCII without quotes/backslashes to keep the JSON valid.
+void ManagerONNX::WriteSlotError(PTcontrolPoint pPoint, const char* what)
+{
+	std::string json = "{\"error\":\"";
+	size_t n = 0;
+	for (const char* c = what; c != nullptr && *c != 0 && n < config.GetGeneralConfigurationMaxText(); ++c, ++n)
+	{
+		const unsigned char ch = static_cast<unsigned char>(*c);
+		json.push_back((ch < 0x20 || ch > 0x7E || ch == '"' || ch == '\\') ? ' ' : static_cast<char>(ch));
+	}
+	json += "\"}";
+
+	constexpr size_t kJsonCapacity = sizeof(pPoint->results.json) / sizeof(WCHAR);
+	const size_t len = json.size() < kJsonCapacity - 1 ? json.size() : kJsonCapacity - 1;
+	for (size_t k = 0; k < len; ++k)
+		pPoint->results.json[k] = static_cast<WCHAR>(static_cast<unsigned char>(json[k]));
+	pPoint->results.json[len] = 0;
+	pPoint->results.state = InferenceState::ERROR_DETECTED;
+}
+
+// Process shutdown
+
+// Process shutdown
+// One manual-reset event, created at startup before the manager. It can be set from any
+// thread: console ctrl handler, "--stop" from another process, later the service handler.
+HANDLE ManagerONNX::s_hShutdown = NULL;
+
+ManagerONNX::ManagerONNX(const IniConfiguration& cfg) : config(cfg), hMapFile(NULL), pSharedList(NULL), hGlobalMutex(NULL), hEventTrigger(NULL), hEventAck(NULL)
 {
 	if (!InitializeIPC())
 	{
-		Log::Error("### ERROR: Global IPC initialization failed!");
-		throw std::runtime_error("### ERROR: Global IPC initialization failed!");
+		const DWORD err = GetLastError();   // da leggere prima della pulizia
+		throw std::runtime_error(
+			"Global IPC initialization failed (GetLastError=" + std::to_string(err) + ")");
 	}
 }
 
@@ -19,16 +50,38 @@ ManagerONNX::~ManagerONNX()
 	if (hEventTrigger) CloseHandle(hEventTrigger);
 	if (hEventAck) CloseHandle(hEventAck);
 }
-
 void ManagerONNX::Run()
 {
+	if (s_hShutdown == NULL)
+	{
+		Log::Error("### ERROR: CreateShutdownEvent() must be called before Run()");
+		return;
+	}
+
 	Log::Info("ONNX manager started. Waiting for signals...");
 
+	// The manager runs until a shutdown is requested. 
+	// QUIT from the external program only stops the workers: the process stays
+	// up and waits for the next configuration.
+	// The shutdown event is first in the array: if both are signaled it wins
+	HANDLE waitHandles[2] = { s_hShutdown, hEventTrigger };
+
 	bool isRunning = true;
-	while (isRunning)
+	while(isRunning)
 	{
-		// ONNX manager waits for a signal from the external program to start
-		WaitForSingleObject(hEventTrigger, INFINITE);
+		DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+		if (waitResult == WAIT_OBJECT_0)
+		{
+			isRunning = false;
+			continue;
+		}
+		if (waitResult != WAIT_OBJECT_0 + 1)
+		{
+			// Never spin on a failing wait: this thread runs at real-time priority
+			Log::Error("### ERROR: wait on shutdown/trigger failed (result {}, error {})", waitResult, GetLastError());
+			Sleep(100);
+			continue;
+		}
 
 		// WAIT_ABANDONED still grants ownership (previous owner crashed while
 		// holding the mutex): it MUST be handled like WAIT_OBJECT_0, otherwise
@@ -39,90 +92,147 @@ void ManagerONNX::Run()
 			requestedState = pSharedList->state;
 			ReleaseMutex(hGlobalMutex);
 		}
-		if (pSharedList->state == ListState::QUIT) {
-			HandleTermination();
-			isRunning = false;
+		else {
+			Log::Error("### ERROR: wait on the global mutex failed (error {})", GetLastError());
+			continue;
 		}
-		else if (pSharedList->state == ListState::UPDATE_PENDING) {
+
+		// Decide on the state read under the mutex, not on a second unprotected read
+		switch (requestedState) {
+		case ListState::UPDATE_PENDING:
 			HandleConfiguration();
+			break;
+		case ListState::QUIT:
+			HandleTermination();
+			break;
+		default:
+			break;
 		}
 	}
-	Log::Info("ONNX manager correctly terminated.");
+
+	// Shutdown of the process: the external program is not waiting for an ack
+	Log::Info(">> Process shutdown requested. Stopping workers...");
+	activeWorkers.clear();
+	Log::Info(">> Workers stopped. Leaving the main loop.");
+}
+
+bool ManagerONNX::CreateShutdownEvent()
+{
+	if (s_hShutdown != NULL)
+		return true;
+
+	s_hShutdown = CreateEventW(NULL, TRUE, FALSE, ONNX_SHUTDOWN_EVENT_NAME);
+	if (s_hShutdown == NULL)
+	{
+		Log::Error("### ERROR: CreateEvent (shutdown) failed with code: {}", GetLastError());
+		return false;
+	}
+	return true;
+}
+
+HANDLE ManagerONNX::ShutdownEventHandle()
+{
+	return s_hShutdown;
+}
+
+void ManagerONNX::RequestShutdown()
+{
+	if (s_hShutdown != NULL) SetEvent(s_hShutdown);
+}
+
+bool ManagerONNX::RequestShutdownOfRunningInstance()
+{
+	HANDLE h = OpenEventW(EVENT_MODIFY_STATE, FALSE, ONNX_SHUTDOWN_EVENT_NAME);
+	if (h == NULL) return false;
+	BOOL ok = SetEvent(h);
+	CloseHandle(h);
+	return ok != FALSE;
 }
 
 bool ManagerONNX::InitializeIPC()
 {
-	// Global mutex and events initialization
-	hGlobalMutex = CreateMutex(NULL, FALSE, TEXT("LISTMUTEX"));
-	hEventTrigger = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTTRIGGER"));
-	hEventAck = CreateEvent(NULL, FALSE, FALSE, TEXT("LISTEVENTACK"));
+	// Logs which step failed, releases whatever was opened so far (the destructor
+	// does not run when the constructor throws) and leaves the real error code in
+	// GetLastError() for the constructor.
+	auto fail = [this](const char* step) {
+		const DWORD err = GetLastError();   // read IMMEDIATELY after the failing call
+		Log::Error("### ERROR: {} failed with code: {}", step, err);
+		if (pSharedList) { UnmapViewOfFile(pSharedList); pSharedList = NULL; }
+		if (hMapFile) { CloseHandle(hMapFile);        hMapFile = NULL; }
+		if (hGlobalMutex) { CloseHandle(hGlobalMutex);    hGlobalMutex = NULL; }
+		if (hEventTrigger) { CloseHandle(hEventTrigger);   hEventTrigger = NULL; }
+		if (hEventAck) { CloseHandle(hEventAck);       hEventAck = NULL; }
+		SetLastError(err);
+		return false;
+		};
+
+	hGlobalMutex = CreateMutex(NULL, FALSE, IPC_LIST_MUTEX_NAME);
+	if (!hGlobalMutex) return fail("CreateMutex");
+
+	hEventTrigger = CreateEvent(NULL, FALSE, FALSE, IPC_LIST_TRIGGER_NAME);
+	if (!hEventTrigger) return fail("CreateEvent (trigger)");
+
+	hEventAck = CreateEvent(NULL, FALSE, FALSE, IPC_LIST_ACK_NAME);
+	if (!hEventAck) return fail("CreateEvent (ack)");
 
 	// Mapping global shared memory
-	hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(controlPointsList), L"CONTROLPOINTLIST");
-
-	if (hMapFile == NULL)
-	{
-		Log::Error("### ERROR: CreateFileMapping failed with code: {}", GetLastError());
-		return false;
-	}
+	hMapFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(controlPointsList), IPC_LIST_MMF_NAME);
+	if (!hMapFile) return fail("CreateFileMapping");
 
 	pSharedList = (PTcontrolPointsList)MapViewOfFile(hMapFile, FILE_MAP_WRITE, 0, 0, sizeof(controlPointsList));
+	if (!pSharedList) return fail("MapViewOfFile");
 
-	if (pSharedList == NULL)
-	{
-		DWORD dwErr = GetLastError();
-		CloseHandle(hMapFile);
-		hMapFile = NULL;
-		Log::Error("### ERROR: MapViewOfFile failed with code: {}", dwErr);
-		return false;
-	}
-
-	return (hGlobalMutex && hEventTrigger && hEventAck);
+	return true;
 }
 
 void ManagerONNX::HandleConfiguration()
 {
 	Log::Info(">> Configuration request received (UPDATE_PENDING)!");
 
+	// The external program stopped sending frames before asking for the update and
+	// does not touch the list until it receives the ack (it released LISTMUTEX before
+	// signaling the trigger). Old workers go first: they release sessions, threads and
+	// handles before the new ones are built
 	activeWorkers.clear();
+
 	bool configSuccess = true;
 
-	DWORD i = 0;
-	try {
-		// Iteration on the control points list to configure each one
-		for (i = 0; i < pSharedList->numPunti; i++) {
-			DWORD idPunto = pSharedList->points[i].idPunto;
+	DWORD count = pSharedList->numPunti;
+	if (count > config.GetGeneralConfigurationMaxControlPoints()) {
+		Log::Error("### ERROR: numPunti = {} exceeds the {} available slots", count, config.GetGeneralConfigurationMaxControlPoints());
+		count = 0;
+		configSuccess = false;
+	}
+
+	// A failing control point does not prevent the others from being configured:
+	// the list state reports the failure, every point reports its own status
+	for (DWORD i = 0; i < count; i++) {
+		PTcontrolPoint pPoint = &pSharedList->points[i];
+		const DWORD idPunto = pPoint->idPunto;
+
+		try {
+			if (activeWorkers.find(idPunto) != activeWorkers.end()) {
+				throw std::runtime_error("duplicate idPunto in the list");
+			}
 
 			// Start a new worker for this point. Creation index + total count
 			// determine the slice of physical cores owned by this worker's
 			// session, so concurrent sessions never compete for a core
-			activeWorkers[idPunto] = std::make_unique<WorkerONNX>(
-				&pSharedList->points[i], i, pSharedList->numPunti);
-			activeWorkers[idPunto]->Start();
+			auto worker = std::make_unique<WorkerONNX>(pPoint, i, count);
+			worker->Start();
 
 			// Set the state to CONFIGURED after the thread creation
-			activeWorkers[idPunto]->MarkAsConfigured();
+			worker->MarkAsConfigured();
+			activeWorkers[idPunto] = std::move(worker);
 		}
-	}
-	catch (const std::exception& e) {
-		DWORD idPunto = pSharedList->points[i].idPunto;
-		Log::Error("### ERROR DURING CONFIGURATION: {}", e.what());
-
-		// If the WorkerONNX constructor threw, operator[] already inserted a NULL
-		// unique_ptr for this id: calling MarkAsError() through it would dereference
-		// a null pointer. In that case the worker never opened its local mutex either,
-		// so write the error state directly into shared memory (the global mutex is
-		// already held by Run()).
-		auto it = activeWorkers.find(idPunto);
-		if (it != activeWorkers.end() && it->second) {
-			it->second->MarkAsError();
+		catch (const std::exception& e) {
+			// The worker constructor released everything it had opened before throwing,
+			// so there is no worker to mark: write the error state straight into the slot
+			Log::Error("### ERROR DURING CONFIGURATION of control point {}: {}", idPunto, e.what());
+			pPoint->status = PointState::ERROR_DETECTED;
+			WriteSlotError(pPoint, e.what());
+			configSuccess = false;
 		}
-		else {
-			pSharedList->points[i].status = PointState::ERROR_DETECTED;
-			Log::Error("Worker {} ERROR_DETECTED (construction failed)", idPunto);
-			activeWorkers.erase(idPunto);
-		}
-		configSuccess = false;
 	}
 
 	DWORD waitMutex = WaitForSingleObject(hGlobalMutex, INFINITE);
@@ -141,10 +251,10 @@ void ManagerONNX::HandleTermination()
 {
 	Log::Info(">> Shutdown request received (QUIT)!");
 
-	// Iterate on each worker and call the Stop method
+	// Stop every worker. The process itself stays up, waiting for the next configuration
 	activeWorkers.clear();
 
 	// Send ack event
 	SetEvent(hEventAck);
-	Log::Info(">> Shutdown completed. Ack sent!");
+	Log::Info(">> Workers stopped. Ack sent, manager still running!");
 }

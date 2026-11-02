@@ -9,6 +9,7 @@
 #include <mutex>
 #include <thread>
 #include <utility>
+#include "Configuration.h"
 
 //
 // AsyncLogger
@@ -37,30 +38,27 @@ enum class LogLevel : uint8_t { Info = 0, Warning = 1, Error = 2 };
 
 class AsyncLogger {
 public:
-    // Max characters per message (longer messages are truncated, not dropped)
-    static constexpr size_t kMaxMessageChars = 480;
-    // Ring capacity. Power of two, bounded: total footprint ~2 MB, allocated once.
-    static constexpr size_t kQueueCapacity = 4096;
-    // The consumer flushes at least this often even without a notify
-    static constexpr DWORD kFlushIntervalMs = 200;
-    // Producers notify the consumer only when the queue crosses this fill level
-    // (or on Error), so the common case is one flush per interval, not per message
-    static constexpr size_t kNotifyThreshold = kQueueCapacity / 4;
-
     static AsyncLogger& Instance();
 
-    void Start();
+    void Start(const IniConfiguration& cfg);
     void Shutdown();
 
     template <typename... Args>
     void Log(LogLevel level, fmt::format_string<Args...> fmtStr, Args&&... args)
     {
-        // Format on the caller's stack: fmt::format_to_n never allocates and
-        // truncates safely at kMaxMessageChars
-        char local[kMaxMessageChars];
-        const auto out = fmt::format_to_n(local, kMaxMessageChars, fmtStr, std::forward<Args>(args)...);
-        // (std::min) parenthesized: immune to the windows.h min/max macros
-        const size_t written = (std::min)(static_cast<size_t>(out.size), kMaxMessageChars);
+        // Below the configured verbosity: bail out before any formatting or locking
+        if (static_cast<WORD>(level) < config.GetLoggerVerbosity())
+          return;
+        const size_t maxChars = max_message_chars_;
+        if (maxChars == 0)
+          return;
+
+        // Allocate runtime-sized buffer directly on the caller's stack frame (zero heap overhead)
+        char* local = static_cast<char*>(_alloca(maxChars));
+
+        const auto out = fmt::format_to_n(local, maxChars, fmtStr, std::forward<Args>(args)...);
+        const size_t written = (std::min)(static_cast<size_t>(out.size), maxChars);
+
         Enqueue(level, local, static_cast<uint16_t>(written));
     }
 
@@ -68,14 +66,14 @@ public:
     AsyncLogger& operator=(const AsyncLogger&) = delete;
 
 private:
-    AsyncLogger() = default;
+    explicit AsyncLogger(const IniConfiguration& cfg) : config(cfg) {};
     ~AsyncLogger();
 
     struct Slot {
         SYSTEMTIME ts;
         LogLevel   level;
         uint16_t   length;
-        char       text[kMaxMessageChars];
+        char*      text; // Points into the pre-allocated contiguous text_pool_
     };
 
     void Enqueue(LogLevel level, const char* msg, uint16_t length);
@@ -83,8 +81,15 @@ private:
     // Drains and prints every queued slot. Returns the number of slots printed.
     size_t DrainQueue();
 
+    // Runtime configuration dimensions loaded from .ini in Start()
+    size_t max_message_chars_ = 0;
+    size_t queue_capacity_ = 0;
+
+    // Pre-allocated once in Start() - no heap allocations during Log()
+    std::unique_ptr<char[]> text_pool_;
+
     // Bounded ring buffer, allocated once with the singleton (no heap churn)
-    Slot ring_[kQueueCapacity];
+    std::unique_ptr<Slot[]> ring_;
     size_t head_ = 0;   // next write position
     size_t tail_ = 0;   // next read position
     size_t count_ = 0;  // slots currently queued
@@ -94,6 +99,8 @@ private:
     std::thread consumer_;
     std::atomic<bool> running_{ false };
     std::atomic<uint64_t> dropped_{ 0 };
+
+    const IniConfiguration& config;
 };
 
 // Convenience free functions: every subsystem logs through these instead of
