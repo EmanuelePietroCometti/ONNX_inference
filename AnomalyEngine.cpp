@@ -194,7 +194,7 @@ void AnomalyEngine::LoadContractMetadata()
     // as BGR, so honor preproc_color_conversion and swap channels before feeding
     // the model. Missing key defaults to bgr2rgb (all our exporter's models).
     const std::string colorConversion = lookupString("preproc_color_conversion");
-    m_convertBgrToRgb = (colorConversion == "bgr2rgb");
+    m_convertBgrToRgb = colorConversion.empty() || colorConversion == "bgr2rgb";
     Log::Info("Metadata 'preproc_color_conversion' = '{}' -> BGR2RGB swap {}.", colorConversion.empty() ? "(missing, default)" : colorConversion, m_convertBgrToRgb ? "ENABLED" : "disabled");
 
     // Calibration Status Verification

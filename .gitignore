@@ -384,3 +384,4 @@ trt_timing_cache/
 /nvinfer_vc_plugin_10.dll
 /nvonnxparser_10.dll
 /trt_cache
+/ADR-001-architecture-review.md
