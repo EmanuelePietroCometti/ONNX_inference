@@ -12,6 +12,14 @@
 
 #pragma pack(push, 4)
 // ENUMS
+// Manages the execution provider
+enum class ExecutionProvider : WORD {
+  CPU = 0,
+  CUDA = 1,
+  TensorRT = 2,
+  OpenVINO_CPU = 3,
+  OpenVINO_GPU = 4,
+};
 // Manages the state of the inference result
 enum class InferenceState : WORD {
   IDLE = 0,
@@ -77,7 +85,11 @@ typedef struct controlPointsList {
   WCHAR listMutexName[128];
   WCHAR listEventTriggerName[128];
   WCHAR listEventAckName[128];
+  // Written by the external program: execution provider used by every point of the list
+  // (uses the former alignment padding before 'points')
+  ExecutionProvider executionProvider;
   controlPoint points[1024];
+  WORD inferenceSoftwareRelease;      // written by ONNX_inference: 0 = not published yet, 1 = NVIDIA package, 2 = OpenVINO package, 3 = CPU-only package
 } controlPointsList, * PTcontrolPointsList;
 
 #pragma pack(pop)
@@ -91,5 +103,5 @@ static_assert(offsetof(controlPoint, pathModello) == 16, "controlPoint::pathMode
 static_assert(offsetof(controlPoint, status) == 1808, "controlPoint::status offset");
 static_assert(offsetof(controlPoint, results) == 1812, "controlPoint::results offset");
 static_assert(offsetof(controlPoint, inferenceType) == 3872, "controlPoint::inferenceType offset");
-static_assert(sizeof(controlPointsList) == 3969800, "controlPointsList layout changed");
+static_assert(sizeof(controlPointsList) == 3969804, "controlPointsList layout changed");
 static_assert(offsetof(controlPointsList, points) == 776, "controlPointsList::points offset");

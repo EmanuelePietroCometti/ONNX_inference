@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IPC_Shared.h"
+#include "OrtRuntime.h"
 #include "WorkerONNX.h"
 #include "Configuration.h"
 
@@ -13,38 +14,41 @@
 
 class ManagerONNX {
 public:
-    ManagerONNX(const IniConfiguration& cfg);
-    ~ManagerONNX();
+	ManagerONNX(const IniConfiguration& cfg);
+	~ManagerONNX();
 
-    // Main loop that waits for trigger
-    void Run();
+	// Main loop that waits for trigger
+	void Run();
 
-    // to be called once at startup, before costructing the manager
-    static bool CreateShutdownEvent();
-    // handle of the shutdown event
-    static HANDLE ShutdownEventHandle();
-    // asks the running manager to leave Run(): console crtl handler, later the service handler
-    static void RequestShutdown();
-    // from another process
-    static bool RequestShutdownOfRunningInstance();
+	// to be called once at startup, before costructing the manager
+	static bool CreateShutdownEvent();
+	// handle of the shutdown event
+	static HANDLE ShutdownEventHandle();
+	// asks the running manager to leave Run(): console crtl handler, later the service handler
+	static void RequestShutdown();
+	// from another process
+	static bool RequestShutdownOfRunningInstance();
+
+	void FailListAndAck(const char* what);
 private:
-    // IPC global handles
-    HANDLE hMapFile;
-    PTcontrolPointsList pSharedList;
-    HANDLE hGlobalMutex;
-    HANDLE hEventTrigger;
-    HANDLE hEventAck;
+	// IPC global handles
+	HANDLE hMapFile;
+	PTcontrolPointsList pSharedList;
+	HANDLE hGlobalMutex;
+	HANDLE hEventTrigger;
+	HANDLE hEventAck;
 
-    static HANDLE s_hShutdown;
+	static HANDLE s_hShutdown;
 
-    const IniConfiguration& config;
+	const IniConfiguration& config;
 
-    // Internal registry to track threads per control points 
-    std::map<DWORD, std::unique_ptr<WorkerONNX>> activeWorkers;
+	// Internal registry to track threads per control points 
+	OrtRuntime ortRuntime;
+	std::map<DWORD, std::unique_ptr<WorkerONNX>> activeWorkers;
 
-    // Internal methods
-    bool InitializeIPC();
-    void HandleConfiguration();
-    void HandleTermination();
-    void WriteSlotError(PTcontrolPoint pPoint, const char* what);
+	// Internal methods
+	bool InitializeIPC();
+	void HandleConfiguration();
+	void HandleTermination();
+	void WriteSlotError(PTcontrolPoint pPoint, const char* what);
 };

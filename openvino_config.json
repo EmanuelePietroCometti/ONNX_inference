@@ -1,0 +1,17 @@
+{
+  "GPU": {
+    "PERFORMANCE_HINT": "LATENCY",
+    "NUM_STREAMS": "1",
+    "EXECUTION_MODE_HINT": "ACCURACY",
+    "MODEL_PRIORITY": "MEDIUM",
+    "CACHE_DIR": "D:/DV/dl/openvino_cache",
+    "CACHE_MODE": "OPTIMIZE_SPEED"
+  },
+  "CPU": {
+    "PERFORMANCE_HINT": "LATENCY",
+    "NUM_STREAMS": "1",
+    "EXECUTION_MODE_HINT": "ACCURACY",
+    "CACHE_DIR": "D:/DV/dl/openvino_cache",
+    "CACHE_MODE": "OPTIMIZE_SPEED"
+  }
+}

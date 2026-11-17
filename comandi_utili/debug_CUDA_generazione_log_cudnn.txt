@@ -1,0 +1,7 @@
+# Permette di lanciare il programma di inferenza raccogliendo i log di cudnn dentro file txt
+
+set CUDNN_LOGLEVEL_DBG=3 && 
+set CUDNN_LOGDEST_DBG=cudnn_log.txt && 
+set CUDNN_FRONTEND_LOG_INFO=1 && 
+set CUDNN_FRONTEND_LOG_FILE=cudnn_fe_log.txt && 
+ONNX_inference.exe

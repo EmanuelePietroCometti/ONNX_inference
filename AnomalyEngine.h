@@ -1,5 +1,6 @@
 #pragma once
-#include "IEngine.h"
+
+#include "OrtEngine.h"
 #include "Configuration.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
@@ -9,97 +10,114 @@
 
 /**
  * @brief Engine class for anomaly detection using ONNX Runtime.
- * Implements the IEngine interface to perform inference, heatmap generation,
- * and score normalization based on model-specific metadata.
+ * Derives from OrtEngine (session + I/O buffers) and adds pre-processing,
+ * heatmap generation and score normalization based on model-specific metadata.
  */
-class AnomalyEngine : public IEngine {
+class AnomalyEngine : public OrtEngine {
 public:
-    AnomalyEngine();
-    ~AnomalyEngine() override;
+	// Structure grouping model calibration data
+	struct Calibration
+	{
+		std::string normalizationFormula;
 
-    void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
+		float classificationMinRaw = 0.0f;
+		float classificationMaxRaw = 1.0f;
+		float classificationThresholdRaw = 0.5f;
+		float classificationThresholdNorm = 0.5f;
 
-    void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels, void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
-    float GetThreshold() const override { return scoreThreshold; }
+		float segmentationMinRaw = 0.0f;
+		float segmentationMaxRaw = 1.0f;
+		float segmentationThresholdRaw = 0.5f;
+		float segmentationThresholdNorm = 0.5f;
+	};
+
+	explicit AnomalyEngine(OrtRuntime& runtime);
+	~AnomalyEngine() override;
+
+	void Initialize(const std::filesystem::path& modelPath, const RT::CpuPartition& cpuPartition, ExecutionProvider executionProvider) override;
+
+	void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
+		void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
+
+	// Model-space thresholds (matching raw score and raw segmentation map units)
+	float GetClassificationThreshold() const { return m_calibration.classificationThresholdRaw; }
+	float GetSegmentationThreshold() const { return m_calibration.segmentationThresholdRaw; }
+
+	// Normalized thresholds (0.0 to 1.0 range): compare against normalized score and map pixel / 255.0f
+	float GetClassificationThresholdNormalized() const { return m_calibration.classificationThresholdNorm; }
+	float GetSegmentationThresholdNormalized() const { return m_calibration.segmentationThresholdNorm; }
+
+	const Calibration& GetCalibration() const { return m_calibration; }
+
+	// Results from the most recent Infer() call (thread-local to the caller thread)
+	float GetLastClassificationScoreRaw() const { return m_lastClassificationScoreRaw; }
+	float GetLastClassificationScoreNormalized() const { return m_lastClassificationScoreNorm; }
+	const std::vector<float>& GetLastSegmentationMapRaw() const { return m_hostSegmentationMap; }
+	const cv::Mat& GetLastSegmentationMapNormalizedU8() const { return m_segmentationMapU8; }
+
 private:
-    std::unique_ptr<Ort::Env> env;
-    std::unique_ptr<Ort::Session> session;
-    Ort::MemoryInfo memoryInfo{ nullptr };
+	void DescribeIo(IoBuffers& io) override;
 
-    // I/O Binding Variables
-    std::unique_ptr<Ort::IoBinding> io_binding;
-    bool m_useGpuIoBinding = false; // Resolved at runtime
+	std::string m_inputName;
+	std::vector<std::string> m_outputNames;
 
-    Ort::Value m_inputTensor{ nullptr };
-    Ort::Value m_scoreTensor{ nullptr };
-    Ort::Value m_mapTensor{ nullptr };
+	std::vector<int64_t> m_inputShape;
+	std::vector<int64_t> m_classificationScoreShape;
+	std::vector<int64_t> m_segmentationMapShape;
 
-    std::string inputName;
-    std::vector<std::string> outputNames;
+	int64_t m_modelChannels = 3;
+	int64_t m_modelHeight = 0;
+	int64_t m_modelWidth = 0;
 
-    std::vector<int64_t> inputShape;
-    std::vector<int64_t> m_scoreShape;
-    std::vector<int64_t> m_mapShape;
+	// Standard RAM buffers for OpenCV processing and CPU fallback
+	std::vector<float> m_inputTensorValues;
+	std::vector<float> m_hostClassificationScore;
+	std::vector<float> m_hostSegmentationMap;
+	std::vector<cv::Mat> m_splitPlanes;
+	cv::Mat m_resizeImage;
 
-    int64_t modelChannels = 3;
-    int64_t modelHeight = 0;
-    int64_t modelWidth = 0;
+	// Antialiased bilinear resize (host-side)
+	// Replaces cv::INTER_AREA, which does NOT match the training/reference resize
+	// (torchvision/PIL antialiased bilinear) and inflated every anomaly score. This
+	// is the SAME explicit separable triangle-filter algorithm as the Python
+	// reference (inference_simulation/src/antialias_resize.py) — keep the two in
+	// sync. Coefficients depend only on (src size -> model size), so they are built
+	// once and reused while the frame size is constant.
+	int m_rsInW = 0, m_rsInH = 0;               // Source size the coefficients were computed for
+	int m_hK = 0, m_vK = 0;                     // Kernel taps per output pixel (horizontal / vertical axes)
+	std::vector<int> m_hBounds, m_vBounds;      // First source index mapped per output pixel
+	std::vector<double> m_hWeights, m_vWeights; // Normalized interpolation weights: [out_size * ksize]
+	cv::Mat m_hpass;                            // Intermediate horizontal pass buffer: [inH x modelWidth] CV_8U
+	void BuildResizeCoeffs(int inW, int inH);
+	void ResizeAntialias(const cv::Mat& src, cv::Mat& dst);
 
-    // Standard RAM buffers for OpenCV processing and CPU fallback
-    std::vector<float> inputTensorValues;
-    std::vector<float> m_hostScore;
-    std::vector<float> m_hostMap;
-    std::vector<cv::Mat> m_splitPlanes;
-    cv::Mat m_resizeImage;
+	int m_classificationOutputIdx = -1;
+	int m_segmentationOutputIdx = -1;
 
-    // Antialiased bilinear resize (host-side)
-    // Replaces cv::INTER_AREA, which does NOT match the training/reference resize
-    // (torchvision/PIL antialiased bilinear) and inflated every anomaly score. This
-    // is the SAME explicit separable triangle-filter algorithm as the Python
-    // reference (inference_simulation/src/antialias_resize.py) — keep the two in
-    // sync. Coefficients depend only on (src size -> model size), so they are built
-    // once and reused while the frame size is constant.
-    int m_rsInW = 0, m_rsInH = 0;              // source size the coeffs were built for
-    int m_hK = 0, m_vK = 0;                    // taps per output pixel (H / V axis)
-    std::vector<int> m_hBounds, m_vBounds;     // first source index per output pixel
-    std::vector<double> m_hWeights, m_vWeights; // [out_size * ksize] normalized weights
-    cv::Mat m_hpass;                           // intermediate [inH x modelWidth] uint8
-    void BuildResizeCoeffs(int inW, int inH);
-    void ResizeAntialias(const cv::Mat& src, cv::Mat& dst);
+	// Segmentation map pipeline:
+	// Raw model float values -> normalized uint8 (single-channel) -> resized to target ROI.
+	// Output to caller is formatted as 3-channel BGR.
+	bool m_writeSegmentationMap = true;
+	cv::Mat m_segmentationMapU8;       // Normalized map at model resolution (CV_8UC1)
+	cv::Mat m_segmentationMapRoiU8;    // Normalized map scaled to source ROI size (CV_8UC1)
+	cv::Mat m_bgrImage;
 
-#if defined(ORT_EP_GPU)
-    // Raw CUDA device pointers for Zero-Copy GPU execution
-    float* d_input = nullptr;
-    float* d_score = nullptr;
-    float* d_map = nullptr;
-#endif
+	bool m_convertBgrToRgb = true;
 
-    int scoreIdx = -1;
-    int mapIdx = -1;
+	// Calibration parsed from ONNX model metadata (see Calibration struct in public section)
+	Calibration m_calibration;
+	bool m_centeredNormalization = false;   // true: anomalib_centered, false: minmax
+	double m_segmentationMapAlpha = 0.0;    // Raw-to-uint8 conversion factor: pixel = alpha * raw + beta
+	double m_segmentationMapBeta = 0.0;
 
-    bool writeHeatmap = true;
-    cv::Mat m_uint8Heatmap;
-    cv::Mat m_largeHeatmap;
-    cv::Mat m_colorHeat;
-    cv::Mat m_overlay;
-    cv::Mat m_maskFull;
-    cv::Mat m_bgrImage;
+	// Cached inference results from the last execution
+	float m_lastClassificationScoreRaw = 0.0f;
+	float m_lastClassificationScoreNorm = 0.0f;
 
-    std::string exportContract;
-    bool normalizationInGraph = false;
+	double m_accResize = 0, m_accNorm = 0, m_accRun = 0, m_accPost = 0;
+	double m_maxRun = 0;
+	int m_frameCount = 0;
+	IniConfiguration& config;
 
-    bool m_convertBgrToRgb = true;
-    float mapMin = 0.0f;
-    float mapMax = 1.0f;
-    float scoreThreshold = 0.5f;
-    float pixelThreshold = 0.0f;
-    bool hasPixelThreshold = false;
-    float m_blendAlpha = 0.5f;
-
-    double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
-    double maxRun = 0;
-    int frameCount = 0;
-    IniConfiguration& config;
-
-    void LoadContractMetadata();
+	void LoadContractMetadata();
 };

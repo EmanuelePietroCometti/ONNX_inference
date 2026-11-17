@@ -1,67 +1,59 @@
 #pragma once
 
-#include "IEngine.h"
+#include "OrtEngine.h"
 #include "Configuration.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
+#include <vector>
 #include <opencv2/opencv.hpp>
 
-class ClassificationEngine : public IEngine {
+/**
+ * @brief Engine class for image classification using ONNX Runtime.
+ * Derives from OrtEngine (session + I/O buffers) and adds pre-processing
+ * and the class_id -> label mapping read from the model metadata.
+ */
+class ClassificationEngine : public OrtEngine {
 public:
-    ClassificationEngine();
-    ~ClassificationEngine() override;
+	explicit ClassificationEngine(OrtRuntime& runtime);
+	~ClassificationEngine() override;
 
-    void Initialize(const std::wstring& modelPath, const RT::CpuPartition& cpuPartition) override;
-    void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
-        void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
-
+	void Initialize(const std::filesystem::path& modelPath, const RT::CpuPartition& cpuPartition, ExecutionProvider executionProvider) override;
+	void Infer(const void* pInputImage, uint32_t width, uint32_t height, uint32_t channels,
+		void* pOutputHeatmap, float& outAnomalyScore, std::string& outStatus, DWORD idPunto) override;
+	std::string GetNamesJSONString() const { return m_classNamesJSONString; }
 private:
-    void LoadGraphContract();
+	void DescribeIo(IoBuffers& io) override;
+	void LoadGraphContract();
 
-    std::unique_ptr<Ort::Env> env;
-    std::unique_ptr<Ort::Session> session;
-    Ort::MemoryInfo memoryInfo{ nullptr };
+	std::string inputName;
+	std::vector<std::string> outputNames;
+	std::vector<int64_t> inputShape;
+	std::vector<int64_t> m_classIdShape;
+	std::vector<int64_t> m_confShape;
 
-    std::unique_ptr<Ort::IoBinding> io_binding;
-    bool m_useGpuIoBinding = false;
+	int64_t modelChannels = 3;
+	int64_t modelHeight = 0;
+	int64_t modelWidth = 0;
 
-    std::string inputName;
-    std::vector<std::string> outputNames;
-    std::vector<int64_t> inputShape;
-    std::vector<int64_t> m_classIdShape;
-    std::vector<int64_t> m_confShape;
+	std::vector<std::string> m_classNames;
+	std::string m_classNamesJSONString;
+	std::string m_outClassIdName;
+	std::string m_outConfidenceName;
 
-    int64_t modelChannels = 3;
-    int64_t modelHeight = 0;
-    int64_t modelWidth = 0;
+	// Host buffers: IoBuffers binds them directly (CPU/OpenVINO) or copies them to/from the device
+	std::vector<float> inputTensorValues;
+	std::vector<int64_t> m_hostClassId;
+	std::vector<float> m_hostConfidence;
 
-    std::vector<std::string> m_classNames;
-    std::string m_outClassIdName;
-    std::string m_outConfidenceName;
+	double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
+	double maxRun = 0;
+	int frameCount = 0;
 
-    Ort::Value m_inputTensor{ nullptr };
-    Ort::Value m_classIdTensor{ nullptr };
-    Ort::Value m_confidenceTensor{ nullptr };
+	std::vector<cv::Mat> m_splitPlanes;
+	cv::Mat m_resizeImage;
+	cv::Mat m_rgbImage;
+	cv::Mat m_bgrImage;
 
-    std::vector<float> inputTensorValues;
-    std::vector<int64_t> m_hostClassId;
-    std::vector<float> m_hostConfidence;
-
-#if defined(ORT_EP_GPU)
-    float* d_input = nullptr;
-    int64_t* d_classId = nullptr;
-    float* d_confidence = nullptr;
-#endif
-
-    double accResize = 0, accNorm = 0, accRun = 0, accPost = 0;
-    double maxRun = 0;
-    int frameCount = 0;
-
-    std::vector<cv::Mat> m_splitPlanes;
-    cv::Mat m_resizeImage;
-    cv::Mat m_rgbImage;
-    cv::Mat m_bgrImage;
-
-    IniConfiguration& config;
+	IniConfiguration& config;
 };

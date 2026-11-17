@@ -36,9 +36,26 @@ ManagerONNX::ManagerONNX(const IniConfiguration& cfg) : config(cfg), hMapFile(NU
 {
 	if (!InitializeIPC())
 	{
-		const DWORD err = GetLastError();   // da leggere prima della pulizia
+		const DWORD err = GetLastError();
 		throw std::runtime_error(
 			"Global IPC initialization failed (GetLastError=" + std::to_string(err) + ")");
+	}
+
+	const DWORD waitMutex = WaitForSingleObject(hGlobalMutex, 5000);
+	if (waitMutex == WAIT_OBJECT_0 || waitMutex == WAIT_ABANDONED)
+	{
+		pSharedList->inferenceSoftwareRelease = PackageInfo::kRelease;
+		ReleaseMutex(hGlobalMutex);
+	}
+	else
+	{
+		Log::Error("### ERROR: release not published (LISTMUTEX not acquired)");
+		UnmapViewOfFile(pSharedList);   pSharedList = NULL;
+		CloseHandle(hMapFile);          hMapFile = NULL;
+		CloseHandle(hGlobalMutex);      hGlobalMutex = NULL;
+		CloseHandle(hEventTrigger);     hEventTrigger = NULL;
+		CloseHandle(hEventAck);         hEventAck = NULL;
+		throw std::runtime_error("ONNX: release not published (LISTMUTEX not acquired)");
 	}
 }
 
@@ -67,7 +84,7 @@ void ManagerONNX::Run()
 	HANDLE waitHandles[2] = { s_hShutdown, hEventTrigger };
 
 	bool isRunning = true;
-	while(isRunning)
+	while (isRunning)
 	{
 		DWORD waitResult = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
 		if (waitResult == WAIT_OBJECT_0)
@@ -98,15 +115,27 @@ void ManagerONNX::Run()
 		}
 
 		// Decide on the state read under the mutex, not on a second unprotected read
-		switch (requestedState) {
-		case ListState::UPDATE_PENDING:
-			HandleConfiguration();
-			break;
-		case ListState::QUIT:
-			HandleTermination();
-			break;
-		default:
-			break;
+		try
+		{
+			switch (requestedState) {
+			case ListState::UPDATE_PENDING:
+				HandleConfiguration();
+				break;
+			case ListState::QUIT:
+				HandleTermination();
+				break;
+			default:
+				break;
+			}
+		}
+		catch (std::exception& e)
+		{
+			Log::Error("### UNEXPECTED ERROR while handling the request: {}", e.what());
+			FailListAndAck(e.what());
+		}
+		catch (...) {
+			Log::Error("### UNEXPECTED NON-STANDARD ERROR while handling the request");
+			FailListAndAck("unknown error");
 		}
 	}
 
@@ -147,6 +176,28 @@ bool ManagerONNX::RequestShutdownOfRunningInstance()
 	BOOL ok = SetEvent(h);
 	CloseHandle(h);
 	return ok != FALSE;
+}
+
+void ManagerONNX::FailListAndAck(const char* what)
+{
+	activeWorkers.clear();
+	DWORD waitMutex = WaitForSingleObject(hGlobalMutex, 5000);
+	if (waitMutex == WAIT_OBJECT_0 || waitMutex == WAIT_ABANDONED)
+	{
+		const DWORD count = (pSharedList->numPunti <= config.GetGeneralConfigurationMaxControlPoints()) ? pSharedList->numPunti : 0;
+		for (DWORD i = 0; i < count; ++i)
+		{
+			PTcontrolPoint p = &pSharedList->points[i];
+			if (p->status != PointState::CONFIGURED)
+			{
+				p->status = PointState::ERROR_DETECTED;
+				WriteSlotError(p, what);
+			}
+			pSharedList->state = ListState::ERROR_DETECTED;
+			ReleaseMutex(hGlobalMutex);
+		}
+	}
+	SetEvent(hEventAck);
 }
 
 bool ManagerONNX::InitializeIPC()
@@ -199,10 +250,14 @@ void ManagerONNX::HandleConfiguration()
 
 	DWORD count = pSharedList->numPunti;
 	if (count > config.GetGeneralConfigurationMaxControlPoints()) {
-		Log::Error("### ERROR: numPunti = {} exceeds the {} available slots", count, config.GetGeneralConfigurationMaxControlPoints());
+		Log::Error("### ERROR: numPoints = {} exceeds the {} available slots", count, config.GetGeneralConfigurationMaxControlPoints());
 		count = 0;
 		configSuccess = false;
 	}
+
+	// Same execution provider for every point of the list: read it once per configuration
+	const ExecutionProvider requestedProvider = pSharedList->executionProvider;
+	Log::Info(">> Requested execution provider: {}", static_cast<int>(requestedProvider));
 
 	// A failing control point does not prevent the others from being configured:
 	// the list state reports the failure, every point reports its own status
@@ -212,13 +267,13 @@ void ManagerONNX::HandleConfiguration()
 
 		try {
 			if (activeWorkers.find(idPunto) != activeWorkers.end()) {
-				throw std::runtime_error("duplicate idPunto in the list");
+				throw std::runtime_error("duplicate pointID in the list");
 			}
 
 			// Start a new worker for this point. Creation index + total count
 			// determine the slice of physical cores owned by this worker's
 			// session, so concurrent sessions never compete for a core
-			auto worker = std::make_unique<WorkerONNX>(pPoint, i, count);
+			auto worker = std::make_unique<WorkerONNX>(ortRuntime, pPoint, i, count, requestedProvider);
 			worker->Start();
 
 			// Set the state to CONFIGURED after the thread creation
@@ -231,6 +286,12 @@ void ManagerONNX::HandleConfiguration()
 			Log::Error("### ERROR DURING CONFIGURATION of control point {}: {}", idPunto, e.what());
 			pPoint->status = PointState::ERROR_DETECTED;
 			WriteSlotError(pPoint, e.what());
+			configSuccess = false;
+		}
+		catch (...) {
+			Log::Error("### ERROR DURING CONFIGURATION of control point {}: non-standard exception", idPunto);
+			pPoint->status = PointState::ERROR_DETECTED;
+			WriteSlotError(pPoint, "unknown error while building the model (TensorRT?)");
 			configSuccess = false;
 		}
 	}
