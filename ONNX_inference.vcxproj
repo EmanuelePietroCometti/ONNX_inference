@@ -351,6 +351,7 @@ xcopy /Y /F "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
     <ClCompile Include="AsyncLogger.cpp" />
     <ClCompile Include="ClassificationEngine.cpp" />
     <ClCompile Include="Configuration.cpp" />
+    <ClCompile Include="ContractMetadata.cpp" />
     <ClCompile Include="IoBuffers.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ManagerONNX.cpp" />
@@ -366,6 +367,7 @@ xcopy /Y /F "$(ProjectDir)ONNXInference_configuration.ini" "$(OutDir)"</Command>
     <ClInclude Include="AsyncLogger.h" />
     <ClInclude Include="ClassificationEngine.h" />
     <ClInclude Include="Configuration.h" />
+    <ClInclude Include="ContractMetadata.h" />
     <ClInclude Include="IoBuffers.h" />
     <ClInclude Include="IPC_Shared.h" />
     <ClInclude Include="ManagerONNX.h" />

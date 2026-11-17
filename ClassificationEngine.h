@@ -2,6 +2,7 @@
 
 #include "OrtEngine.h"
 #include "Configuration.h"
+#include "ContractMetadata.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -40,6 +41,9 @@ private:
 	std::string m_classNamesJSONString;
 	std::string m_outClassIdName;
 	std::string m_outConfidenceName;
+
+	// Resize flag for cv::resize, taken from the model contract (preproc_resize_interpolation)
+	int m_resizeInterpolation = cv::INTER_LINEAR;
 
 	// Host buffers: IoBuffers binds them directly (CPU/OpenVINO) or copies them to/from the device
 	std::vector<float> inputTensorValues;

@@ -11,53 +11,6 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace {
-
-	// Parser for the flat JSON string array. Avoids pulling a JSON dependency into the engine for a
-	// single well-known, machine-generated field.
-	std::vector<std::string> ParseJsonStringArray(const std::string& json)
-	{
-		std::vector<std::string> out;
-		size_t i = json.find('[');
-		if (i == std::string::npos) {
-			throw std::runtime_error("names_ordered metadata is not a JSON array.");
-		}
-
-		for (++i; i < json.size(); ++i) {
-			if (json[i] == ']') break;
-			if (json[i] != '"') continue;
-
-			std::string value;
-			for (++i; i < json.size() && json[i] != '"'; ++i) {
-				if (json[i] == '\\' && i + 1 < json.size()) ++i;
-				value.push_back(json[i]);
-			}
-			out.push_back(std::move(value));
-		}
-
-		if (out.empty()) {
-			throw std::runtime_error("names_ordered metadata contains no class names.");
-		}
-		return out;
-	}
-
-	std::string LookupMetadata(const Ort::ModelMetadata& meta,
-		Ort::AllocatorWithDefaultOptions& allocator,
-		const char* key,
-		bool required)
-	{
-		Ort::AllocatedStringPtr value = meta.LookupCustomMetadataMapAllocated(key, allocator);
-		if (value == nullptr) {
-			if (required) {
-				throw std::runtime_error(std::string("Missing required ONNX metadata key: ") + key);
-			}
-			return {};
-		}
-		return std::string(value.get());
-	}
-
-} // namespace
-
 ClassificationEngine::ClassificationEngine(OrtRuntime& runtime)
 	: OrtEngine(runtime, "Classification"), config(IniConfiguration::Instance())
 {
@@ -81,40 +34,13 @@ void ClassificationEngine::DescribeIo(IoBuffers& io)
 
 void ClassificationEngine::LoadGraphContract()
 {
-	Ort::AllocatorWithDefaultOptions allocator;
-	Ort::ModelMetadata meta = session->GetModelMetadata();
-
-	// Class names
-	// The graph was exported without --embed-names, so it emits class_id only.
-	// This vector is the sole index -> label mapping available at runtime.
-	m_classNames = ParseJsonStringArray(LookupMetadata(meta, allocator, "names_ordered", true));
-	m_classNamesJSONString = LookupMetadata(meta, allocator, "names", true);
-	// Normalization contract
-	// 'none' means the graph performs /255 internally and expects raw [0,255]
-	// floats. Feeding pre-normalized data would silently produce wrong
-	// predictions, so refuse to run instead of guessing.
-	const std::string normalization = LookupMetadata(meta, allocator, "normalization", true);
-	if (normalization != "none") {
-		throw std::runtime_error(
-			"ONNX graph declares normalization='" + normalization +
-			"' but this engine feeds raw [0,255] values. Re-export with --normalize none.");
-	}
-
-	// Geometry contract
-	const std::string imgszStr = LookupMetadata(meta, allocator, "imgsz", true);
-	const int64_t graphImgsz = std::stoll(imgszStr);
-	if (graphImgsz != modelHeight || graphImgsz != modelWidth) {
-		throw std::runtime_error(
-			"imgsz mismatch: metadata says " + imgszStr + " but the input tensor is " +
-			std::to_string(modelWidth) + "x" + std::to_string(modelHeight) + ".");
-	}
-
-	// Colour order
-	const std::string colorOrder = LookupMetadata(meta, allocator, "input_color_order", false);
-	if (!colorOrder.empty() && colorOrder != "RGB") {
-		throw std::runtime_error(
-			"ONNX graph expects colour order '" + colorOrder + "'; this engine converts BGR->RGB.");
-	}
+	// Metadata contract (shared with the anomaly engine): version, class names, normalisation, imgsz,
+	// colour order and the resize interpolation. Throws when the model cannot be run as trained.
+	const Contract::ClassificationContract contract = Contract::LoadClassificationContract(
+		Contract::MetadataReader::FromSession(*session), modelWidth, modelHeight);
+	m_classNames = contract.classNames;
+	m_classNamesJSONString = contract.namesJson;
+	m_resizeInterpolation = contract.preprocessing.cvInterpolation;
 
 	// Output resolution
 	// Resolve by name rather than by position: the export can emit class_id,
@@ -133,8 +59,7 @@ void ClassificationEngine::LoadGraphContract()
 	m_outClassIdName = "class_id";
 	m_outConfidenceName = "confidence";
 
-	Log::Info("Classification contract: {} classes, imgsz {}, normalization {}, batch {}",
-		m_classNames.size(), graphImgsz, normalization, inputShape[0]);
+	Log::Info("Classification graph: outputs '{}' and '{}' found, batch {}.", m_outClassIdName, m_outConfidenceName, inputShape[0]);
 }
 
 
@@ -157,9 +82,7 @@ void ClassificationEngine::Initialize(const std::filesystem::path& modelPath, co
 
 	if (inputShape[0] <= 0) inputShape[0] = 1;
 	if (inputShape[2] <= 0 || inputShape[3] <= 0) {
-		Ort::ModelMetadata meta = session->GetModelMetadata();
-		const std::string imgszStr = LookupMetadata(meta, allocator, "imgsz", true);
-		const int64_t imgsz = std::stoll(imgszStr);
+		const int64_t imgsz = Contract::MetadataReader::FromSession(*session).RequireInt("imgsz");
 		if (inputShape[2] <= 0) inputShape[2] = imgsz;
 		if (inputShape[3] <= 0) inputShape[3] = imgsz;
 	}
@@ -223,7 +146,7 @@ void ClassificationEngine::Infer(const void* pInputImage, uint32_t width, uint32
 		cv::cvtColor(rawImg, m_bgrImage, cv::COLOR_GRAY2BGR);
 		pSrc = &m_bgrImage;
 	}
-	cv::resize(*pSrc, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, cv::INTER_LINEAR);
+	cv::resize(*pSrc, m_resizeImage, cv::Size(static_cast<int>(modelWidth), static_cast<int>(modelHeight)), 0, 0, m_resizeInterpolation);
 	cv::cvtColor(m_resizeImage, m_rgbImage, cv::COLOR_BGR2RGB);
 
 	auto t1 = std::chrono::steady_clock::now();

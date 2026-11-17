@@ -30,9 +30,6 @@
     <ClCompile Include="ClassificationEngine.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
-    <ClCompile Include="OrtsessionConfig.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
     <ClCompile Include="AsyncLogger.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
@@ -40,6 +37,24 @@
       <Filter>File di origine</Filter>
     </ClCompile>
     <ClCompile Include="Configuration.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="IoBuffers.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="OrtEngine.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="OrtRuntime.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="PluginEPLibrary.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="ProviderSelector.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
+    <ClCompile Include="ContractMetadata.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
   </ItemGroup>
@@ -53,16 +68,10 @@
     <ClInclude Include="WorkerONNX.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
-    <ClInclude Include="IEngine.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
     <ClInclude Include="AnomalyEngine.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="ClassificationEngine.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="OrtsessionConfig.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="AsyncLogger.h">
@@ -78,6 +87,24 @@
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="PackageRelease.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="IoBuffers.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="OrtEngine.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="OrtRuntime.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="PluginEPLibrary.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="ProviderSelector.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+    <ClInclude Include="ContractMetadata.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
   </ItemGroup>

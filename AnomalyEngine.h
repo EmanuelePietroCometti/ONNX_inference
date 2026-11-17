@@ -2,6 +2,7 @@
 
 #include "OrtEngine.h"
 #include "Configuration.h"
+#include "ContractMetadata.h"
 #include <onnxruntime_cxx_api.h>
 #include <memory>
 #include <string>
@@ -15,21 +16,8 @@
  */
 class AnomalyEngine : public OrtEngine {
 public:
-	// Structure grouping model calibration data
-	struct Calibration
-	{
-		std::string normalizationFormula;
-
-		float classificationMinRaw = 0.0f;
-		float classificationMaxRaw = 1.0f;
-		float classificationThresholdRaw = 0.5f;
-		float classificationThresholdNorm = 0.5f;
-
-		float segmentationMinRaw = 0.0f;
-		float segmentationMaxRaw = 1.0f;
-		float segmentationThresholdRaw = 0.5f;
-		float segmentationThresholdNorm = 0.5f;
-	};
+	// Calibration read from the model metadata (parsed and validated by Contract::LoadAnomalyContract)
+	using Calibration = Contract::AnomalyCalibration;
 
 	explicit AnomalyEngine(OrtRuntime& runtime);
 	~AnomalyEngine() override;
@@ -76,20 +64,9 @@ private:
 	std::vector<cv::Mat> m_splitPlanes;
 	cv::Mat m_resizeImage;
 
-	// Antialiased bilinear resize (host-side)
-	// Replaces cv::INTER_AREA, which does NOT match the training/reference resize
-	// (torchvision/PIL antialiased bilinear) and inflated every anomaly score. This
-	// is the SAME explicit separable triangle-filter algorithm as the Python
-	// reference (inference_simulation/src/antialias_resize.py) — keep the two in
-	// sync. Coefficients depend only on (src size -> model size), so they are built
-	// once and reused while the frame size is constant.
-	int m_rsInW = 0, m_rsInH = 0;               // Source size the coefficients were computed for
-	int m_hK = 0, m_vK = 0;                     // Kernel taps per output pixel (horizontal / vertical axes)
-	std::vector<int> m_hBounds, m_vBounds;      // First source index mapped per output pixel
-	std::vector<double> m_hWeights, m_vWeights; // Normalized interpolation weights: [out_size * ksize]
-	cv::Mat m_hpass;                            // Intermediate horizontal pass buffer: [inH x modelWidth] CV_8U
-	void BuildResizeCoeffs(int inW, int inH);
-	void ResizeAntialias(const cv::Mat& src, cv::Mat& dst);
+	// Resize flag for cv::resize, taken from the model contract (preproc_resize_interpolation).
+	// Must be the one used at training time: a different filter shifts every anomaly score.
+	int m_resizeInterpolation = cv::INTER_LINEAR;
 
 	int m_classificationOutputIdx = -1;
 	int m_segmentationOutputIdx = -1;
@@ -119,5 +96,4 @@ private:
 	int m_frameCount = 0;
 	IniConfiguration& config;
 
-	void LoadContractMetadata();
 };
